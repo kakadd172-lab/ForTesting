@@ -10363,7 +10363,7 @@ async function StartDesktopMP4Recording(filename, state) {
       const buffer = output.target.buffer;
       if (!buffer || buffer.byteLength === 0) throw new Error('The MP4 encoder returned an empty file.');
       const blob = new Blob([buffer], { type: 'video/mp4' });
-      const cleanName = (filename || 'ascii_recording').replace(/\\.(mp4|webm|mov)$/i, '');
+      const cleanName = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '');
       DownloadBlob(blob, cleanName + '.mp4');
     } finally {
       if (Module.browserMp4State === state) Module.browserMp4State = null;
