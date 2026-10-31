@@ -2,24 +2,24 @@
 
 This branch is an isolated test in `ForTesting`. It does not modify `CAM-ASCII-cpp/main`.
 
-## What this test changes
+## Mobile rendering and export changes
 
-- On small touch-first phone viewports only, the real GLFW/WebGL window is created at **720 × 1280** from the start.
-- The portrait dimensions are passed into `GLFW.createWindow` before the generated runtime stores the window's logical width and height. This is important: resizing only after window creation can leave the app's logical render dimensions in landscape.
-- Later GLFW size requests are kept portrait while the phone viewport matches the mobile condition. If the viewport changes to landscape, the test switches back to the existing 1280 × 720 window size.
-- The browser camera bridge keeps its legacy 1280 × 720 input buffer. On phones it places a 9:16 center-cropped camera image into that buffer; the portrait render grid then scales the image into the matching 9:16 grid. This is part of the rendering path, not a crop of a finished landscape screenshot.
-- TXT continues to come from the compiled app's portrait character grid. On phones, PNG now captures the actual WebGL canvas instead of the compiled app's older PNG byte export. Mobile video mirrors each rendered WebGL frame to a same-size 2D canvas before recording, so selected colour modes and effects are included; the downloaded extension is matched to the format the browser supports (MP4 when available, otherwise WebM).
-- Desktop browsers do not match the phone-only condition, so their existing window sizing and rendering path are left as-is.
+- The phone-only GLFW window is created at **720 × 1280** before the generated runtime stores its logical dimensions.
+- Mobile resize callbacks now check both logical window dimensions and framebuffer dimensions. If either becomes landscape, the actual GLFW canvas is reset to 720 × 1280.
+- The mobile PNG callback exports the visible WebGL canvas directly with `canvas.toBlob()`. It checks both the WebGL drawing-buffer dimensions and the canvas backing dimensions; if either is landscape, it attempts to restore the portrait window and waits for another rendered frame. It refuses to save a landscape image rather than cropping it.
+- TXT still comes from the compiled app's character grid.
+- Mobile video uses Mediabunny with WebCodecs AVC/H.264 and an MP4 output container. It captures frames directly from the original WebGL canvas, preserving the app's selected visual mode, colors, CRT/HUD overlays and animation. It does not create a WebM file or rename WebM data as MP4. If AVC/H.264 encoding is unavailable, it reports an error instead of downloading a different format.
+- Desktop browsers retain their existing WebM browser-recorder path and PNG byte-export path.
+- The page uses a versioned JavaScript URL to avoid reusing a cached copy of the old export code.
 
-## Test checklist
+## Phone test checklist
 
-1. Open the page on a phone in portrait orientation using HTTPS / GitHub Pages.
-2. Confirm the live ASCII preview itself is portrait and shows the complete camera composition (not a landscape image squeezed into a narrow display).
-3. Save a PNG and inspect its pixel dimensions and composition.
-4. Save a TXT and confirm the character grid has substantially more rows than columns.
-5. Record a short video and confirm it is 9:16 with the same portrait composition as the live preview.
-6. Open the same test page on a desktop browser and confirm the existing 16:9 preview and exports remain unchanged.
+1. Open this branch's GitHub Pages test page on a phone in portrait orientation. Reload it after deployment.
+2. Save a PNG. Its actual image dimensions should be portrait (height greater than width), and its composition should match the visible preview.
+3. Save a TXT. Confirm the character grid has substantially more rows than columns.
+4. Record a short video in RGB, then another in Cyberpunk. Both downloads should be genuine `.mp4` files and show the same colours/effects visible in the preview.
+5. Test on a desktop browser and confirm its existing 16:9 view and exports are unchanged.
 
-## Important verification status
+## Verification status and limitations
 
-The WebAssembly binary is loaded read-only from `CAM-ASCII-cpp/main`; this test does not rebuild or replace it. The fix is therefore a browser-runtime change to the dimensions supplied to the existing GLFW/WebGL renderer. The mobile PNG/video changes have been committed, but an actual browser run on a phone is still required to confirm the drawing buffer is truly portrait and the browser can encode MP4/H.264. If MP4 is unsupported, the app intentionally reports failure instead of downloading WebM. Do not treat this branch as proven until those phone tests pass.
+The WebAssembly binary is still loaded read-only from `CAM-ASCII-cpp/main`; it has not been rebuilt or replaced. The changes are isolated to the browser HTML/JavaScript in this `ForTesting` branch. The source has been reviewed, but actual phone-browser testing is still required. MP4 encoding depends on the phone browser providing WebCodecs AVC/H.264 support; if it does not, the page reports that MP4 recording cannot start rather than creating WebM.
