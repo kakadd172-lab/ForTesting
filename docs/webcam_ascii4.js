@@ -9970,89 +9970,148 @@ var ASM_CONSTS = {
  207748: () => { return window.innerHeight; },  
  207775: () => { if (document.pointerLockElement) return 1; }
 };
-function BrowserStartRecording(filename) {
+async function StartPhoneMP4Recording(filename, state) {
   const canvas = document.getElementById('canvas');
-  if (!canvas || !canvas.captureStream || !window.MediaRecorder) return 0;
-
-  const mobilePortrait = IsPhonePortraitRender();
-  let mime = null;
-
-  if (mobilePortrait) {
-    // The phone export must be a real MP4. Never fall back to WebM or
-    // save WebM bytes with an .mp4 extension.
-    const mp4Candidates = [
-      'video/mp4;codecs="avc1.42E01E"',
-      'video/mp4'
-    ];
-    for (const candidate of mp4Candidates) {
-      if (MediaRecorder.isTypeSupported(candidate)) {
-        mime = candidate;
-        break;
-      }
-    }
-    if (!mime) {
-      console.error('MP4 recording is not supported by this phone browser.');
-      return 0;
-    }
-  } else {
-    // Preserve the original desktop browser recorder behaviour.
-    for (const candidate of [
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm'
-    ]) {
-      if (MediaRecorder.isTypeSupported(candidate)) {
-        mime = candidate;
-        break;
-      }
-    }
-    if (!mime) return 0;
+  if (!canvas || canvas.width <= 0 || canvas.height <= canvas.width) {
+    throw new Error('The live render canvas is not portrait. MP4 recording was not started.');
   }
 
+  if (typeof VideoEncoder === 'undefined') {
+    throw new Error('This browser does not support WebCodecs AVC/H.264 encoding.');
+  }
+
+  const library = window.ASCII_MP4_READY
+    ? await window.ASCII_MP4_READY
+    : await import('https://cdn.jsdelivr.net/npm/mediabunny@1.62.1/+esm');
+
+  const { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality } = library;
+  const output = new Output({
+    format: new Mp4OutputFormat(),
+    target: new BufferTarget()
+  });
+  const videoSource = new CanvasSource(canvas, {
+    codec: 'avc',
+    quality: new Quality({ bitrate: 8000000 })
+  });
+
+  output.addVideoTrack(videoSource, { frameRate: 30 });
+  await output.start();
+
+  state.output = output;
+  state.videoSource = videoSource;
+  state.startedAt = performance.now();
+  state.frameCount = 0;
+  state.status = 'recording';
+
+  const addRenderedFrames = async () => {
+    if (state.stopRequested) {
+      try {
+        videoSource.close();
+        await output.finalize();
+        const buffer = output.target.buffer;
+        if (!buffer || buffer.byteLength === 0) {
+          throw new Error('The MP4 encoder produced an empty file.');
+        }
+        const blob = new Blob([buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '') + '.mp4';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        state.status = 'finished';
+      } catch (error) {
+        state.status = 'failed';
+        console.error('MP4 finalization failed:', error);
+        alert('MP4 export failed: ' + (error.message || error));
+      } finally {
+        Module.browserMp4State = null;
+      }
+      return;
+    }
+
+    const elapsed = (performance.now() - state.startedAt) / 1000;
+    const expectedTimestamp = state.frameCount / 30;
+    if (elapsed >= expectedTimestamp) {
+      try {
+        // Capture the original WebGL canvas, not a reconstructed text image.
+        // This preserves the exact RGB/Cyberpunk mode, CRT, HUD and animation.
+        await videoSource.add(expectedTimestamp, 1 / 30);
+        state.frameCount++;
+      } catch (error) {
+        state.status = 'failed';
+        state.stopRequested = true;
+        console.error('MP4 frame encoding failed:', error);
+        alert('MP4 recording failed: ' + (error.message || error));
+      }
+    }
+
+    if (Module.browserMp4State === state) {
+      state.raf = requestAnimationFrame(addRenderedFrames);
+    }
+  };
+
+  if (state.stopRequested) {
+    state.status = 'recording';
+    state.raf = requestAnimationFrame(addRenderedFrames);
+  } else {
+    await videoSource.add(0, 1 / 30);
+    state.frameCount = 1;
+    state.raf = requestAnimationFrame(addRenderedFrames);
+  }
+}
+
+function BrowserStartRecording(filename) {
+  if (IsPhonePortraitRender()) {
+    if (Module.browserMp4State) return 0;
+    const state = { status: 'starting', stopRequested: false, raf: 0 };
+    Module.browserMp4State = state;
+    StartPhoneMP4Recording(UTF8ToString(filename), state).catch(error => {
+      state.status = 'failed';
+      Module.browserMp4State = null;
+      console.error('Could not start genuine MP4 recording:', error);
+      alert('MP4 recording could not start: ' + (error.message || error));
+    });
+    return 1;
+  }
+
+  // Original desktop browser recorder path remains unchanged.
+  const canvas = document.getElementById('canvas');
+  if (!canvas || !canvas.captureStream || !window.MediaRecorder) return 0;
+  let mime = null;
+  for (const candidate of [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ]) {
+    if (MediaRecorder.isTypeSupported(candidate)) {
+      mime = candidate;
+      break;
+    }
+  }
+  if (!mime) return 0;
+
   try {
-    // Record the actual WebGL canvas directly. Do not copy frames through a
-    // second 2D canvas: direct capture preserves the exact rendered pixels,
-    // selected colour mode, CRT effects, HUD and animation.
     const stream = canvas.captureStream(30);
     const recorder = new MediaRecorder(stream, {
       mimeType: mime,
       videoBitsPerSecond: 16000000
     });
-
-    // Confirm the browser did not silently choose a different container.
-    const actualMime = (recorder.mimeType || mime).toLowerCase();
-    if (mobilePortrait && !actualMime.startsWith('video/mp4')) {
-      stream.getTracks().forEach(track => track.stop());
-      console.error('The browser did not create an MP4 recording.');
-      return 0;
-    }
-
     Module.browserRecorder = recorder;
     Module.browserRecordingStream = stream;
     Module.browserRecordingChunks = [];
-    const requestedFilename = UTF8ToString(filename) || 'ascii_recording';
-    Module.browserRecordingFilename = mobilePortrait
-      ? requestedFilename.replace(/\.(mp4|webm|mov)$/i, '') + '.mp4'
-      : requestedFilename;
-
+    Module.browserRecordingFilename = UTF8ToString(filename);
     recorder.ondataavailable = function(event) {
-      if (event.data && event.data.size > 0) {
-        Module.browserRecordingChunks.push(event.data);
-      }
+      if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data);
     };
-
-    recorder.onerror = function(event) {
-      console.error('Browser video recording failed:', event.error || event);
-    };
-
     recorder.onstop = function() {
-      const blob = new Blob(Module.browserRecordingChunks, {
-        type: recorder.mimeType || mime
-      });
+      const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || mime });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = Module.browserRecordingFilename || 'ascii_recording.mp4';
+      a.download = Module.browserRecordingFilename || 'ascii_recording.webm';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -10062,7 +10121,6 @@ function BrowserStartRecording(filename) {
       Module.browserRecordingStream = null;
       Module.browserRecordingChunks = [];
     };
-
     recorder.start(1000);
     return 1;
   } catch (error) {
@@ -10070,70 +10128,74 @@ function BrowserStartRecording(filename) {
     return 0;
   }
 }
-function BrowserStopRecording() { const recorder = Module.browserRecorder; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
+function BrowserStopRecording() {
+  if (Module.browserMp4State) {
+    Module.browserMp4State.stopRequested = true;
+    return;
+  }
+  const recorder = Module.browserRecorder;
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+}
 function BrowserDownloadPNG(filename) { const canvas = document.getElementById('canvas'); if (!canvas) { console.error('ASCII canvas not found.'); return; } canvas.toBlob(function(blob) { if (!blob) { console.error('Could not create PNG screenshot.'); return; } const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }, 'image/png'); }
 function BrowserDownloadPNGBytes(filename,bytes,length) {
   const downloadName = UTF8ToString(filename);
-  const mobilePortrait = IsPhonePortraitRender();
+  if (!IsPhonePortraitRender()) {
+    // Keep the desktop export path unchanged.
+    const copy = HEAPU8.slice(bytes, bytes + length);
+    const blob = new Blob([copy], { type: 'image/png' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = downloadName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return;
+  }
 
-  if (mobilePortrait) {
-    // The canvas backing store is the physical WebGL framebuffer. Use its
-    // intrinsic dimensions, not the CSS display dimensions, for the PNG.
-    const canvas = document.getElementById('canvas');
-    if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
-      console.error('Portrait WebGL framebuffer is unavailable for PNG export.');
-      return;
-    }
+  const canvas = document.getElementById('canvas');
+  const glfw = Module.GLFW;
+  const active = glfw && glfw.active;
 
-    // WebGL drawing buffers can be cleared after presentation unless the
-    // context preserves them. Read the currently presented framebuffer.
-    const gl = Module.ctx || (
-      canvas.getContext('webgl2') ||
-      canvas.getContext('webgl')
-    );
-    if (!gl) {
-      console.error('WebGL context unavailable for portrait PNG export.');
-      return;
-    }
+  const savePortraitCanvas = (attempt) => {
+    const gl = Module.ctx;
+    const width = gl && gl.drawingBufferWidth ? gl.drawingBufferWidth : canvas.width;
+    const height = gl && gl.drawingBufferHeight ? gl.drawingBufferHeight : canvas.height;
 
-    const width = gl.drawingBufferWidth || canvas.width;
-    const height = gl.drawingBufferHeight || canvas.height;
-    if (width <= 0 || height <= 0 || height <= width) {
-      console.error('Portrait PNG export stopped: framebuffer is not portrait.', {
+    // If the browser resized the backing store after GLFW initialized, restore
+    // the real portrait window and wait for its next rendered frame.
+    if (width <= 0 || height <= width) {
+      if (active && attempt < 3) {
+        glfw.setWindowSize(active.id, 720, 1280);
+        requestAnimationFrame(() => requestAnimationFrame(() => savePortraitCanvas(attempt + 1)));
+        return;
+      }
+      console.error('PNG not saved: the live WebGL framebuffer is not portrait.', {
         canvasWidth: canvas.width,
         canvasHeight: canvas.height,
         framebufferWidth: width,
-        framebufferHeight: height
+        framebufferHeight: height,
+        glfwWidth: active && active.width,
+        glfwHeight: active && active.height
       });
+      alert('PNG was not saved because the live render surface is still landscape. Please reload the page and try again.');
       return;
     }
 
-    // Copy the actual framebuffer pixels. No CSS scaling and no landscape crop.
-    const pixels = new Uint8Array(width * height * 4);
-    gl.finish();
-    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-
-    const imageCanvas = document.createElement('canvas');
-    imageCanvas.width = width;
-    imageCanvas.height = height;
-    const imageContext = imageCanvas.getContext('2d');
-    if (!imageContext) {
-      console.error('Could not create portrait PNG image context.');
-      return;
+    // toBlob captures the actual WebGL drawing buffer, including the exact
+    // selected mode and overlays. Its pixel dimensions are canvas.width × height.
+    if (canvas.width !== width || canvas.height !== height) {
+      if (attempt < 3) {
+        requestAnimationFrame(() => savePortraitCanvas(attempt + 1));
+        return;
+      }
     }
 
-    const imageData = imageContext.createImageData(width, height);
-    const rowBytes = width * 4;
-    // WebGL rows are bottom-up; PNG canvas rows are top-down.
-    for (let y = 0; y < height; y++) {
-      const sourceStart = (height - 1 - y) * rowBytes;
-      imageData.data.set(pixels.subarray(sourceStart, sourceStart + rowBytes), y * rowBytes);
-    }
-    imageContext.putImageData(imageData, 0, 0);
-
-    imageCanvas.toBlob(function(blob) {
+    canvas.toBlob(function(blob) {
       if (!blob) {
-        console.error('Could not encode portrait framebuffer as PNG.');
+        console.error('Could not encode the portrait WebGL canvas as PNG.');
+        alert('PNG export failed. Please try again.');
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -10145,26 +10207,28 @@ function BrowserDownloadPNGBytes(filename,bytes,length) {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     }, 'image/png');
+  };
+
+  if (!canvas) {
+    console.error('PNG not saved: WebGL canvas not found.');
     return;
   }
-
-  // Preserve the original desktop PNG export path.
-  const copy = HEAPU8.slice(bytes, bytes + length);
-  const blob = new Blob([copy], { type: 'image/png' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = downloadName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  savePortraitCanvas(0);
 }
 function BrowserDownloadText(filename,contents) { const blob = new Blob([UTF8ToString(contents)], { type: 'text/plain;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
 function StartBrowserCamera() { if (Module.browserCameraStarted) return; Module.browserCameraStarted = true; Module.browserCameraStatus = 0; const video = document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true; const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720; Module.browserCameraVideo = video; Module.browserCameraCanvas = canvas; Module.browserCameraContext = canvas.getContext('2d', { willReadFrequently: true }); if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { Module.browserCameraStatus = -1; return; } navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false }).then(function(stream) { video.srcObject = stream; return video.play(); }).then(function() { Module.browserCameraStatus = 1; }).catch(function(error) { console.error('Browser camera failed:', error); Module.browserCameraStatus = -1; }); }
 function GetBrowserCameraStatus() { return Module.browserCameraStatus || 0; }
 function IsPhonePortraitRender() {
-  return !!(window.matchMedia && window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches);
+  const phoneViewport = !!(
+    window.matchMedia &&
+    window.matchMedia('(max-width: 520px), (pointer: coarse)').matches
+  );
+  const activeWindow = Module.GLFW && Module.GLFW.active;
+  const portraitRuntime = !!(
+    activeWindow &&
+    activeWindow.width <= activeWindow.height
+  );
+  return phoneViewport || (portraitRuntime && phoneViewport);
 }
 function ReadBrowserCameraRGBA(destination) {
   const video = Module.browserCameraVideo;
