@@ -8,7 +8,7 @@ This branch is an isolated test in `ForTesting`. It does not modify `CAM-ASCII-c
 - The portrait dimensions are passed into `GLFW.createWindow` before the generated runtime stores the window's logical width and height. This is important: resizing only after window creation can leave the app's logical render dimensions in landscape.
 - Later GLFW size requests are kept portrait while the phone viewport matches the mobile condition. If the viewport changes to landscape, the test switches back to the existing 1280 × 720 window size.
 - The browser camera bridge keeps its legacy 1280 × 720 input buffer. On phones it places a 9:16 center-cropped camera image into that buffer; the portrait render grid then scales the image into the matching 9:16 grid. This is part of the rendering path, not a crop of a finished landscape screenshot.
-- PNG, TXT, and video still use the app's existing export paths. They should inherit the actual portrait render surface/grid: PNG and TXT are produced by the compiled app, while video records the WebGL canvas.
+- TXT continues to come from the compiled app's portrait character grid. On phones, PNG now captures the actual WebGL canvas instead of the compiled app's older PNG byte export. Mobile video mirrors each rendered WebGL frame to a same-size 2D canvas before recording, so selected colour modes and effects are included; the downloaded extension is matched to the format the browser supports (MP4 when available, otherwise WebM).
 - Desktop browsers do not match the phone-only condition, so their existing window sizing and rendering path are left as-is.
 
 ## Test checklist
@@ -22,4 +22,4 @@ This branch is an isolated test in `ForTesting`. It does not modify `CAM-ASCII-c
 
 ## Important verification status
 
-The WebAssembly binary is loaded read-only from `CAM-ASCII-cpp/main`; this test does not rebuild or replace it. The fix is therefore a browser-runtime change to the dimensions supplied to the existing GLFW/WebGL renderer. The code change has been reviewed, but an actual browser run on a phone is still required to confirm all three exported formats. Do not treat this branch as proven until that phone test passes.
+The WebAssembly binary is loaded read-only from `CAM-ASCII-cpp/main`; this test does not rebuild or replace it. The fix is therefore a browser-runtime change to the dimensions supplied to the existing GLFW/WebGL renderer. The mobile PNG/video changes have been committed, but an actual browser run on a phone is still required to confirm the exported image, the selected visual mode in recorded video, and format compatibility. Do not treat this branch as proven until those phone tests pass.
