@@ -1,0 +1,616 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080b12">
+  <title>ASCII Webcam Studio</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #080b12;
+      color: #e8edf7;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      height: 100vh;
+      overflow: hidden;
+      padding: clamp(10px, 2vw, 24px);
+      background:
+        radial-gradient(ellipse at top, #142039 0%, #080b12 58%);
+    }
+
+    .app {
+      width: min(100%, 1200px);
+      height: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border: 1px solid #36e5c0;
+      border-radius: 12px;
+      color: #36e5c0;
+      font-weight: 800;
+      font-size: 20px;
+      box-shadow: 0 0 22px #36e5c01c;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(18px, 3vw, 25px);
+      letter-spacing: .04em;
+    }
+
+    .subtitle {
+      margin-top: 4px;
+      color: #8b9ab3;
+      font-size: 12px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .live {
+      color: #36e5c0;
+      border: 1px solid #36e5c044;
+      border-radius: 99px;
+      padding: 7px 11px;
+      font-size: 11px;
+      letter-spacing: .1em;
+      white-space: nowrap;
+    }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid #27334a;
+      border-radius: 16px;
+      background: #0c111c;
+      box-shadow: 0 18px 60px #0005;
+    }
+
+    .panel-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid #202b3d;
+      color: #9eacc3;
+      font-size: 12px;
+    }
+
+    .panel-top strong {
+      color: #e8edf7;
+      font-weight: 600;
+    }
+
+    .screen {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 240px;
+      padding: clamp(6px, 1.5vw, 16px);
+      background:
+        linear-gradient(#121a28 1px, transparent 1px),
+        linear-gradient(90deg, #121a28 1px, transparent 1px),
+        #06090f;
+      background-size: 24px 24px;
+    }
+
+    .emscripten_border {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      border: 1px solid #26334a;
+      border-radius: 8px;
+      background: #000;
+    }
+
+    canvas.emscripten {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: calc(100vh - 260px);
+      border: 0;
+      background: #000;
+      object-fit: contain;
+    }
+
+    #status {
+      color: #36e5c0;
+      text-align: center;
+      font-size: 12px;
+      padding: 8px;
+    }
+
+    #spinner, #emscripten_logo, #controls, #output {
+      display: none !important;
+    }
+
+    #progress {
+      width: min(260px, 80%);
+      height: 4px;
+      accent-color: #36e5c0;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 4px 0;
+      color: #65748c;
+      font-size: 11px;
+    }
+
+
+    .mobile-menu-wrap { display: none; }
+    .mobile-menu-button {
+      min-height: 42px;
+      padding: 9px 14px;
+      border: 1px solid #36e5c066;
+      border-radius: 10px;
+      background: #101b2a;
+      color: #36e5c0;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .mobile-menu {
+      display: none;
+      padding: 12px;
+      border-top: 1px solid #202b3d;
+      background: #0a101b;
+      gap: 14px;
+    }
+    .mobile-menu.open { display: grid; }
+    .mobile-menu .menu-section { display: grid; gap: 8px; }
+    .mobile-menu .menu-label {
+      color: #8b9ab3;
+      font-size: 11px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .mobile-menu .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+    }
+    .mobile-menu button:not(.mobile-menu-button) {
+      min-height: 40px;
+      padding: 8px 6px;
+      border: 1px solid #2d4158;
+      border-radius: 9px;
+      background: #111b2a;
+      color: #e8edf7;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .mobile-menu button:active { border-color: #36e5c0; background: #1d3b43; }
+    @media (max-width: 520px) {
+      .mobile-menu-wrap { display: block; padding: 8px 10px; border-top: 1px solid #202b3d; }
+      .mobile-menu { margin: 0; }
+    }
+
+    @media (max-width: 520px) {
+      body { height: auto; min-height: 100vh; overflow: auto; }
+      .app { height: auto; min-height: calc(100vh - 20px); }
+      .panel { flex: none; overflow: visible; }
+      .screen {
+        height: 72svh;
+        min-height: 420px;
+        padding: 4px;
+        flex: none;
+      }
+      .emscripten_border {
+        height: 100%;
+        width: min(100%, calc(72svh * 9 / 16));
+        min-width: 0;
+        border-radius: 6px;
+      }
+      canvas.emscripten {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100%;
+        max-height: none;
+        aspect-ratio: 9 / 16;
+        object-fit: fill;
+      }
+      .mobile-controls { display: grid; }
+      footer { padding-bottom: 4px; }
+    }
+
+    @media (max-width: 520px) {
+      body { padding: 10px; }
+      header { margin-bottom: 12px; }
+      .mark { width: 38px; height: 38px; }
+      .subtitle { font-size: 10px; }
+      .screen { min-height: 0; padding: 4px; }
+      .panel-top { padding: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="brand">
+        <div class="mark">A/</div>
+        <div>
+          <h1>ASCII Webcam</h1>
+          <div class="subtitle">Real-time character studio</div>
+        </div>
+      </div>
+      <div class="live">● WEB EDITION</div>
+    </header>
+
+    <section class="panel">
+      <div class="panel-top">
+        <strong>CAMERA OUTPUT</strong>
+        <span>LIVE RENDER</span>
+      </div>
+
+      <div class="screen">
+        <div class="emscripten_border">
+          <canvas class="emscripten" id="canvas"
+                  oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+        </div>
+      </div>
+
+
+      <div class="mobile-menu-wrap">
+        <button type="button" class="mobile-menu-button" id="mobileMenuButton"
+                aria-expanded="false" aria-controls="mobileMenu">☰ Controls</button>
+      </div>
+      <div class="mobile-menu" id="mobileMenu" aria-label="Camera controls">
+        <div class="menu-section">
+          <span class="menu-label">Render mode</span>
+          <div class="menu-grid">
+            <button type="button" data-key="1">RGB</button>
+            <button type="button" data-key="2">Matrix</button>
+            <button type="button" data-key="3">Edge</button>
+            <button type="button" data-key="4">Cyberpunk</button>
+            <button type="button" data-key="5">Amber</button>
+            <button type="button" data-key="6">Game Boy</button>
+            <button type="button" data-key="7">Thermal</button>
+            <button type="button" data-key="8">Binary</button>
+            <button type="button" data-key="9">Glitch</button>
+          </div>
+        </div>
+        <div class="menu-section">
+          <span class="menu-label">Effects</span>
+          <div class="menu-grid">
+            <button type="button" data-key="c">CRT</button>
+            <button type="button" data-key="h">HUD</button>
+            <button type="button" data-key="q">Detail</button>
+          </div>
+        </div>
+        <div class="menu-section">
+          <span class="menu-label">Camera</span>
+          <div class="menu-grid">
+            <button type="button" data-key="p">Pause / Resume</button>
+            <button type="button" data-key="s">Snapshot</button>
+            <button type="button" data-key="r">Record</button>
+            <button type="button" data-camera="user">Front camera</button>
+            <button type="button" data-camera="environment">Back camera</button>
+          </div>
+        </div>
+        <div class="menu-section">
+          <span class="menu-label">Image tuning</span>
+          <div class="menu-grid">
+            <button type="button" data-adjust="font" data-direction="-1">Font −</button>
+            <button type="button" data-adjust="font" data-direction="1">Font +</button>
+            <button type="button" data-adjust="brightness" data-direction="-1">Brightness −</button>
+            <button type="button" data-adjust="brightness" data-direction="1">Brightness +</button>
+            <button type="button" data-adjust="contrast" data-direction="-1">Contrast −</button>
+            <button type="button" data-adjust="contrast" data-direction="1">Contrast +</button>
+          </div>
+        </div>
+        <p style="margin:0;color:#65748c;font-size:11px;line-height:1.5">Image tuning uses the app's existing pause-menu keyboard controls.</p>
+      </div>
+
+      <div id="status">Starting application…</div>
+      <div style="text-align:center;padding:0 12px 12px">
+        <progress value="0" max="100" id="progress" hidden></progress>
+      </div>
+    </section>
+
+    <footer>
+      <span>ASCII WEBCAM STUDIO</span>
+      <span>Powered by WebAssembly</span>
+    </footer>
+  </main>
+
+  <script>
+    var statusElement = document.getElementById('status');
+    var progressElement = document.getElementById('progress');
+    var spinnerElement = document.getElementById('spinner');
+    var canvasElement = document.getElementById('canvas');
+    var outputElement = document.getElementById('output');
+
+
+    const mobileMenuButton = document.getElementById('mobileMenuButton');
+    const mobileMenu = document.getElementById('mobileMenu');
+    mobileMenuButton.addEventListener('click', () => {
+      const open = mobileMenu.classList.toggle('open');
+      mobileMenuButton.setAttribute('aria-expanded', String(open));
+      mobileMenuButton.textContent = open ? '✕ Close controls' : '☰ Controls';
+    });
+
+    // Raylib's browser input layer reads keydown/keyup on window.
+    // Keep the key held briefly so the WASM main loop can observe the press.
+    function dispatchAppKey(key) {
+      const keyCodeMap = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Escape: 27 };
+      const keyCode = keyCodeMap[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+      const codeMap = { ArrowLeft: 'ArrowLeft', ArrowUp: 'ArrowUp', ArrowRight: 'ArrowRight', ArrowDown: 'ArrowDown', Enter: 'Enter', Escape: 'Escape' };
+      const code = codeMap[key] || (key >= '1' && key <= '9' ? 'Digit' + key : 'Key' + key.toUpperCase());
+      const eventKey = ({ ArrowLeft: 'ArrowLeft', ArrowUp: 'ArrowUp', ArrowRight: 'ArrowRight', ArrowDown: 'ArrowDown' })[key] || key;
+      const makeKeyEvent = (type) => {
+        const event = new KeyboardEvent(type, { key: eventKey, code, bubbles: true, cancelable: true });
+        Object.defineProperty(event, 'keyCode', { get: () => keyCode });
+        Object.defineProperty(event, 'which', { get: () => keyCode });
+        return event;
+      };
+      // Send input straight to the same GLFW handler used by real keyboard events.
+      // This is more reliable on mobile browsers, which may treat synthetic
+      // KeyboardEvents differently from physical key presses.
+      const sendKey = (pressed) => {
+        if (Module.GLFW && Module.GLFW.active && typeof Module.GLFW.onKeyChanged === 'function') {
+          Module.GLFW.onKeyChanged(keyCode, pressed ? 1 : 0);
+        } else {
+          window.dispatchEvent(makeKeyEvent(pressed ? 'keydown' : 'keyup'));
+        }
+      };
+      sendKey(true);
+      window.setTimeout(() => {
+        sendKey(false);
+        if (window.matchMedia('(max-width: 520px), (pointer: coarse)').matches) {
+          canvasElement.style.setProperty('display', 'block', 'important');
+          canvasElement.style.setProperty('width', '100%', 'important');
+          canvasElement.style.setProperty('height', '100%', 'important');
+          canvasElement.style.setProperty('aspect-ratio', '9 / 16', 'important');
+          canvasElement.style.setProperty('max-width', '100%', 'important');
+          canvasElement.style.setProperty('max-height', 'none', 'important');
+        }
+      }, 100);
+    }
+
+    document.querySelectorAll('#mobileMenu [data-key]').forEach((button) => {
+      button.addEventListener('click', () => {
+        canvasElement.focus();
+        dispatchAppKey(button.dataset.key.length === 1 ? button.dataset.key : button.dataset.key);
+      });
+    });
+
+    // Switch the browser camera stream without restarting the WebAssembly app.
+    async function switchBrowserCamera(facingMode) {
+      const video = Module.browserCameraVideo;
+      if (!video || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        statusElement.textContent = 'Camera switching is not supported by this browser.';
+        return;
+      }
+
+      const buttons = document.querySelectorAll('#mobileMenu [data-camera]');
+      buttons.forEach((button) => { button.disabled = true; });
+      statusElement.textContent = facingMode === 'environment' ? 'Switching to back camera…' : 'Switching to front camera…';
+
+      const previousStream = video.srcObject;
+      const previousTrack = previousStream && previousStream.getVideoTracks()[0];
+      const previousFacing = previousTrack && previousTrack.getSettings
+        ? previousTrack.getSettings().facingMode
+        : '';
+      let newStream = null;
+
+      try {
+        // Prefer an exact facing-mode request so the browser does not silently
+        // keep using the front camera when the back camera was requested.
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false
+          });
+        } catch (firstError) {
+          // Some mobile browsers cannot open the second camera while the first
+          // stream is active. Release it, then retry the requested camera.
+          if (previousStream) previousStream.getTracks().forEach((track) => track.stop());
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false
+          });
+        }
+
+        video.srcObject = newStream;
+        await video.play();
+        statusElement.textContent = facingMode === 'environment' ? 'Back camera active' : 'Front camera active';
+      } catch (error) {
+        console.error('Camera switch failed:', error);
+        if (newStream) newStream.getTracks().forEach((track) => track.stop());
+
+        // If switching failed after releasing the old stream, try to restore
+        // the previous camera rather than leaving the preview blank.
+        if (previousFacing && video.srcObject !== previousStream) {
+          try {
+            const restored = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: previousFacing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+              audio: false
+            });
+            video.srcObject = restored;
+            await video.play();
+          } catch (restoreError) {
+            console.error('Could not restore previous camera:', restoreError);
+          }
+        } else if (previousStream && previousStream.getTracks().some((track) => track.readyState === 'live')) {
+          video.srcObject = previousStream;
+        }
+
+        const reason = error && error.name ? error.name : 'unknown error';
+        statusElement.textContent = 'Camera switch failed (' + reason + '). Check camera permission and try again.';
+      } finally {
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    }
+
+    document.querySelectorAll('#mobileMenu [data-camera]').forEach((button) => {
+      button.addEventListener('click', () => switchBrowserCamera(button.dataset.camera));
+    });
+
+    // The existing pause menu uses item 1 for font size, 2 for brightness,
+    // and 3 for contrast. Open it, select the item, adjust once, then resume.
+    document.querySelectorAll('#mobileMenu [data-adjust]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const item = { font: 1, brightness: 2, contrast: 3 }[button.dataset.adjust];
+        const direction = Number(button.dataset.direction) < 0 ? 'ArrowLeft' : 'ArrowRight';
+        canvasElement.focus();
+        dispatchAppKey('p');
+        window.setTimeout(() => {
+          for (let i = 0; i < item; i++) {
+            window.setTimeout(() => dispatchAppKey('ArrowDown'), i * 130);
+          }
+          window.setTimeout(() => dispatchAppKey(direction), item * 130 + 130);
+          window.setTimeout(() => dispatchAppKey('p'), item * 130 + 300);
+        }, 150);
+      });
+    });
+
+    canvasElement.addEventListener('webglcontextlost', (e) => {
+      alert('Graphics context lost. Please reload the page.');
+      e.preventDefault();
+    }, false);
+
+    var setStatus = (text) => {
+      if (!setStatus.last) setStatus.last = { time: Date.now(), text: '' };
+      if (text === setStatus.last.text) return;
+
+      var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+      setStatus.last.time = Date.now();
+      setStatus.last.text = text;
+
+      if (m) {
+        progressElement.value = parseInt(m[2]) * 100;
+        progressElement.max = parseInt(m[4]) * 100;
+        progressElement.hidden = false;
+      } else {
+        progressElement.hidden = true;
+      }
+
+      statusElement.textContent = text || 'Ready';
+    };
+
+    // Mobile-only viewport configuration. The original PC browser path is untouched.
+    function configureMobilePortraitRuntime(GLFW) {
+      const isPhone = () => !!(
+        window.matchMedia &&
+        window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches
+      );
+
+      if (!isPhone() || !GLFW) return;
+
+      const portraitWidth = 720;
+      const portraitHeight = 1280;
+      const originalSetWindowSize = GLFW.setWindowSize.bind(GLFW);
+      const originalCreateWindow = GLFW.createWindow.bind(GLFW);
+
+      // Force the app's real WebGL/GLFW drawing buffer to remain portrait on phones.
+      // This also neutralizes its legacy 16:9 resize correction on this phone-only path.
+      GLFW.setWindowSize = (windowId, width, height) => {
+        if (isPhone() && GLFW.active && GLFW.active.id === windowId) {
+          return originalSetWindowSize(windowId, portraitWidth, portraitHeight);
+        }
+        return originalSetWindowSize(windowId, width, height);
+      };
+
+      // Set portrait dimensions immediately after the WebGL window is created.
+      GLFW.createWindow = (width, height, title, monitor, share) => {
+        const windowId = originalCreateWindow(width, height, title, monitor, share);
+        if (isPhone() && windowId) {
+          originalSetWindowSize(windowId, portraitWidth, portraitHeight);
+        }
+        return windowId;
+      };
+
+      // Re-apply the correct dimensions when a phone rotates back into portrait.
+      const mediaQuery = window.matchMedia('(max-width: 520px) and (pointer: coarse)');
+      const handleOrientationChange = () => {
+        if (!GLFW.active) return;
+        if (mediaQuery.matches) {
+          originalSetWindowSize(GLFW.active.id, portraitWidth, portraitHeight);
+        } else {
+          originalSetWindowSize(GLFW.active.id, 1280, 720);
+        }
+      };
+      if (mediaQuery.addEventListener) {
+        mediaQuery.addEventListener('change', handleOrientationChange);
+      } else if (mediaQuery.addListener) {
+        mediaQuery.addListener(handleOrientationChange);
+      }
+    }
+
+    var Module = {
+      print(...args) { console.log(...args); },
+      onGLFWReady: configureMobilePortraitRuntime,
+      locateFile(path) {
+        if (path.endsWith('.wasm')) {
+          return 'https://raw.githubusercontent.com/kakadd172-lab/CAM-ASCII-cpp/main/docs/webcam_ascii4.wasm';
+        }
+        return path;
+      },
+      canvas: canvasElement,
+      setStatus: setStatus,
+      totalDependencies: 0,
+      monitorRunDependencies(left) {
+        this.totalDependencies = Math.max(this.totalDependencies, left);
+        setStatus(left
+          ? 'Preparing… (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')'
+          : 'Ready');
+      }
+    };
+
+    setStatus('Loading WebAssembly…');
+
+    window.onerror = window.onunhandledrejection = () => {
+      setStatus('An error occurred. Check the browser console.');
+    };
+  </script>
+
+  <script async type="text/javascript" src="webcam_ascii4.js"></script>
+</body>
+</html>
