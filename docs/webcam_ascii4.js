@@ -10319,6 +10319,89 @@ async function StartMobileMP4Recording(filename, state) {
 }
 
 
+async function StartDesktopMP4Recording(filename, state) {
+  const library = window.ASCII_MP4_READY ? await window.ASCII_MP4_READY : null;
+  if (!library) throw new Error('The MP4 encoder could not be loaded.');
+
+  const { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality } = library;
+  const source = document.getElementById('canvas');
+  if (!source) throw new Error('The desktop canvas is not available.');
+
+  // Encode the existing desktop canvas directly. Its dimensions and aspect
+  // ratio are left exactly as rendered by the desktop app.
+  const output = new Output({
+    format: new Mp4OutputFormat(),
+    target: new BufferTarget()
+  });
+  const videoSource = new CanvasSource(source, {
+    codec: 'avc',
+    quality: new Quality('high')
+  });
+  output.addVideoTrack(videoSource, { frameRate: 30 });
+  await output.start();
+
+  state.output = output;
+  state.videoSource = videoSource;
+  state.startedAt = performance.now();
+  state.frameCount = 0;
+  state.finalizing = false;
+
+  const addFrame = async () => {
+    const timestamp = state.frameCount / 30;
+    await videoSource.add(timestamp, 1 / 30);
+    state.frameCount++;
+  };
+
+  await addFrame();
+
+  const finish = async () => {
+    if (state.finalizing) return;
+    state.finalizing = true;
+    try {
+      videoSource.close();
+      await output.finalize();
+      const buffer = output.target.buffer;
+      if (!buffer || buffer.byteLength === 0) throw new Error('The MP4 encoder returned an empty file.');
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      const cleanName = (filename || 'ascii_recording').replace(/\\.(mp4|webm|mov)$/i, '');
+      DownloadBlob(blob, cleanName + '.mp4');
+    } finally {
+      if (Module.browserMp4State === state) Module.browserMp4State = null;
+    }
+  };
+
+  const tick = async () => {
+    if (state.stopRequested) {
+      await finish();
+      return;
+    }
+
+    const elapsed = (performance.now() - state.startedAt) / 1000;
+    if (elapsed >= state.frameCount / 30) await addFrame();
+
+    if (state.stopRequested) {
+      await finish();
+      return;
+    }
+
+    state.raf = requestAnimationFrame(() => {
+      tick().catch(error => {
+        console.error('Desktop MP4 recording failed:', error);
+        alert('MP4 recording failed: ' + (error.message || error));
+        if (Module.browserMp4State === state) Module.browserMp4State = null;
+      });
+    });
+  };
+
+  state.raf = requestAnimationFrame(() => {
+    tick().catch(error => {
+      console.error('Desktop MP4 recording failed:', error);
+      alert('MP4 recording failed: ' + (error.message || error));
+      if (Module.browserMp4State === state) Module.browserMp4State = null;
+    });
+  });
+}
+
 function BrowserStartRecording(filename) {
   if (IsMobilePortraitExport()) {
     if (Module.browserMp4State) return 0;
@@ -10333,31 +10416,17 @@ function BrowserStartRecording(filename) {
     return 1;
   }
 
-  // Original desktop recorder is preserved unchanged.
   const source = document.getElementById('canvas');
-  if (!source || !source.captureStream || !window.MediaRecorder) return 0;
-  let mime = null;
-  for (const candidate of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
-    if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; }
-  }
-  if (!mime) return 0;
-  try {
-    const stream = source.captureStream(30);
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16000000 });
-    Module.browserRecorder = recorder;
-    Module.browserRecordingStream = stream;
-    Module.browserRecordingChunks = [];
-    Module.browserRecordingFilename = UTF8ToString(filename);
-    recorder.ondataavailable = function(event) { if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data); };
-    recorder.onstop = function() {
-      const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || 'video/webm' });
-      DownloadBlob(blob, Module.browserRecordingFilename || 'ascii_recording.webm');
-      stream.getTracks().forEach(track => track.stop());
-      Module.browserRecorder = null; Module.browserRecordingStream = null; Module.browserRecordingChunks = [];
-    };
-    recorder.start(1000);
-    return 1;
-  } catch (error) { console.error('Could not start browser recording:', error); return 0; }
+  if (!source || Module.browserMp4State) return 0;
+  const state = { stopRequested: false, raf: 0 };
+  Module.browserMp4State = state;
+  const requestedName = UTF8ToString(filename);
+  StartDesktopMP4Recording(requestedName, state).catch(error => {
+    console.error('Could not start desktop MP4 recording:', error);
+    alert('MP4 recording could not start: ' + (error.message || error));
+    if (Module.browserMp4State === state) Module.browserMp4State = null;
+  });
+  return 1;
 }
 function BrowserStopRecording() {
   if (Module.browserMp4State) {
