@@ -537,20 +537,17 @@
 
     // Mobile-only viewport configuration. The original PC browser path is untouched.
     function configureMobilePortraitRuntime(GLFW) {
-      const isPhone = () => !!(
-        window.matchMedia &&
-        window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches
-      );
+      const mediaQuery = window.matchMedia('(max-width: 520px) and (pointer: coarse)');
+      const isPhone = () => mediaQuery.matches;
 
-      if (!isPhone() || !GLFW) return;
+      if (!GLFW) return;
 
       const portraitWidth = 720;
       const portraitHeight = 1280;
       const originalSetWindowSize = GLFW.setWindowSize.bind(GLFW);
       const originalCreateWindow = GLFW.createWindow.bind(GLFW);
 
-      // Force the app's real WebGL/GLFW drawing buffer to remain portrait on phones.
-      // This also neutralizes its legacy 16:9 resize correction on this phone-only path.
+      // Keep later app resize requests portrait while this is a phone-sized viewport.
       GLFW.setWindowSize = (windowId, width, height) => {
         if (isPhone() && GLFW.active && GLFW.active.id === windowId) {
           return originalSetWindowSize(windowId, portraitWidth, portraitHeight);
@@ -558,20 +555,23 @@
         return originalSetWindowSize(windowId, width, height);
       };
 
-      // Set portrait dimensions immediately after the WebGL window is created.
+      // IMPORTANT: Give createWindow portrait dimensions BEFORE GLFW_Window stores
+      // its logical width/height. Resizing only after creation can leave the app's
+      // logical render dimensions at 1280x720 even when the canvas is later resized.
       GLFW.createWindow = (width, height, title, monitor, share) => {
-        const windowId = originalCreateWindow(width, height, title, monitor, share);
-        if (isPhone() && windowId) {
-          originalSetWindowSize(windowId, portraitWidth, portraitHeight);
+        if (isPhone()) {
+          return originalCreateWindow(
+            portraitWidth, portraitHeight, title, monitor, share
+          );
         }
-        return windowId;
+        return originalCreateWindow(width, height, title, monitor, share);
       };
 
-      // Re-apply the correct dimensions when a phone rotates back into portrait.
-      const mediaQuery = window.matchMedia('(max-width: 520px) and (pointer: coarse)');
+      // Switch the actual window size if a phone rotates between portrait/landscape.
+      // Use the unwrapped function here so the landscape transition is not forced back.
       const handleOrientationChange = () => {
         if (!GLFW.active) return;
-        if (mediaQuery.matches) {
+        if (isPhone()) {
           originalSetWindowSize(GLFW.active.id, portraitWidth, portraitHeight);
         } else {
           originalSetWindowSize(GLFW.active.id, 1280, 720);
