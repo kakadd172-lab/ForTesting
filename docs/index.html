@@ -226,12 +226,12 @@
       touch-action: manipulation;
     }
     .mobile-menu button:active { border-color: #36e5c0; background: #1d3b43; }
-    @media (max-width: 520px) and (pointer: coarse) {
+    @media (max-width: 520px) {
       .mobile-menu-wrap { display: block; padding: 8px 10px; border-top: 1px solid #202b3d; }
       .mobile-menu { margin: 0; }
     }
 
-    @media (max-width: 520px) and (pointer: coarse) {
+    @media (max-width: 520px) {
       body { height: auto; min-height: 100vh; overflow: auto; }
       .app { height: auto; min-height: calc(100vh - 20px); }
       .panel { flex: none; overflow: visible; }
@@ -260,7 +260,7 @@
       footer { padding-bottom: 4px; }
     }
 
-    @media (max-width: 520px) and (pointer: coarse) {
+    @media (max-width: 520px) {
       body { padding: 10px; }
       header { margin-bottom: 12px; }
       .mark { width: 38px; height: 38px; }
@@ -403,7 +403,7 @@
       sendKey(true);
       window.setTimeout(() => {
         sendKey(false);
-        if (window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches) {
+        if (window.matchMedia('(max-width: 520px), (pointer: coarse)').matches) {
           canvasElement.style.setProperty('display', 'block', 'important');
           canvasElement.style.setProperty('width', '100%', 'important');
           canvasElement.style.setProperty('height', '100%', 'important');
@@ -535,97 +535,8 @@
       statusElement.textContent = text || 'Ready';
     };
 
-    // Mobile-only viewport configuration. The original PC browser path is untouched.
-    function configureMobilePortraitRuntime(GLFW) {
-      const mediaQuery = window.matchMedia('(max-width: 520px) and (pointer: coarse)');
-      const isPhone = () => mediaQuery.matches;
-
-      if (!GLFW) return;
-
-      const portraitWidth = 720;
-      const portraitHeight = 1280;
-      const originalSetWindowSize = GLFW.setWindowSize.bind(GLFW);
-      const originalCreateWindow = GLFW.createWindow.bind(GLFW);
-      const originalAdjustCanvasDimensions = GLFW.adjustCanvasDimensions.bind(GLFW);
-      const originalOnCanvasResize = GLFW.onCanvasResize.bind(GLFW);
-      let correctingPortraitResize = false;
-
-      // Keep later app resize requests portrait while this is a phone-sized viewport.
-      GLFW.setWindowSize = (windowId, width, height) => {
-        if (isPhone() && GLFW.active && GLFW.active.id === windowId) {
-          return originalSetWindowSize(windowId, portraitWidth, portraitHeight);
-        }
-        return originalSetWindowSize(windowId, width, height);
-      };
-
-      // Pass portrait dimensions into GLFW BEFORE its window object and drawing
-      // buffer are created. This sets the render target, not just the CSS box.
-      GLFW.createWindow = (width, height, title, monitor, share) => {
-        if (isPhone()) {
-          return originalCreateWindow(
-            portraitWidth, portraitHeight, title, monitor, share
-          );
-        }
-        return originalCreateWindow(width, height, title, monitor, share);
-      };
-
-      // GLFW can receive resize events from the browser canvas after startup.
-      // Re-enforce portrait if one of those events attempts to make the backing
-      // framebuffer landscape. Keep the window's logical and framebuffer sizes
-      // in sync rather than merely stretching a portrait CSS container.
-      GLFW.onCanvasResize = (width, height, framebufferWidth, framebufferHeight) => {
-        if (isPhone() && GLFW.active &&
-            (width > height ||
-             framebufferWidth > framebufferHeight ||
-             GLFW.active.width > GLFW.active.height) &&
-            !correctingPortraitResize) {
-          correctingPortraitResize = true;
-          // Reset both GLFW's logical window and the canvas backing store.
-          // The callback can report landscape CSS dimensions even when the
-          // app originally created a portrait window.
-          originalSetWindowSize(GLFW.active.id, portraitWidth, portraitHeight);
-          correctingPortraitResize = false;
-          return;
-        }
-        return originalOnCanvasResize(width, height, framebufferWidth, framebufferHeight);
-      };
-
-      GLFW.adjustCanvasDimensions = () => {
-        if (isPhone() && GLFW.active) {
-          GLFW.active.width = portraitWidth;
-          GLFW.active.height = portraitHeight;
-          GLFW.active.storedWidth = portraitWidth;
-          GLFW.active.storedHeight = portraitHeight;
-        }
-        return originalAdjustCanvasDimensions();
-      };
-
-      // Switch the actual window size if a phone rotates between portrait/landscape.
-      // Use the unwrapped function here so the landscape transition is not forced back.
-      const handleOrientationChange = () => {
-        if (!GLFW.active) return;
-        if (isPhone()) {
-          originalSetWindowSize(GLFW.active.id, portraitWidth, portraitHeight);
-        } else {
-          originalSetWindowSize(GLFW.active.id, 1280, 720);
-        }
-      };
-      if (mediaQuery.addEventListener) {
-        mediaQuery.addEventListener('change', handleOrientationChange);
-      } else if (mediaQuery.addListener) {
-        mediaQuery.addListener(handleOrientationChange);
-      }
-    }
-
     var Module = {
       print(...args) { console.log(...args); },
-      onGLFWReady: configureMobilePortraitRuntime,
-      locateFile(path) {
-        // Load the matching WASM from this same GitHub Pages deployment.
-        // Avoid cross-repository raw URLs: Pages must serve the exact local
-        // binary alongside this generated JavaScript runtime.
-        return path;
-      },
       canvas: canvasElement,
       setStatus: setStatus,
       totalDependencies: 0,
@@ -645,11 +556,13 @@
   </script>
 
   <script type="module">
-    // The phone recorder uses WebCodecs + an MP4 muxer. It reads the actual
-    // WebGL canvas so the saved video contains the app's rendered colour modes,
-    // CRT/HUD overlays and animation without a second rendering pass.
-    window.ASCII_MP4_READY = import('https://cdn.jsdelivr.net/npm/mediabunny@1.62.1/+esm');
+    // Mobile MP4 exports use the actual live render, muxed into an MP4 file.
+    window.ASCII_MP4_READY = import('https://cdn.jsdelivr.net/npm/mediabunny@1.62.1/+esm')
+      .catch(error => {
+        console.error('MP4 encoder library could not be loaded:', error);
+        return null;
+      });
   </script>
-  <script async type="text/javascript" src="webcam_ascii4.js?v=20261031-portrait-png-mp4"></script>
+  <script async type="text/javascript" src="webcam_ascii4.js?v=20261031-export-only"></script>
 </body>
 </html>
