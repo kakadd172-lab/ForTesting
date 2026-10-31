@@ -9970,6 +9970,15 @@ var ASM_CONSTS = {
  207748: () => { return window.innerHeight; },  
  207775: () => { if (document.pointerLockElement) return 1; }
 };
+function NormalizeMP4Filename(filename) {
+  let cleanName = filename || 'ascii_recording';
+  const mediaExtensions = ['.mp4', '.webm', '.mov'];
+  while (mediaExtensions.some(ext => cleanName.toLowerCase().endsWith(ext))) {
+    cleanName = cleanName.slice(0, cleanName.lastIndexOf('.'));
+  }
+  return cleanName + '.mp4';
+}
+
 async function StartPhoneMP4Recording(filename, state) {
   const canvas = document.getElementById('canvas');
   if (!canvas || canvas.width <= 0 || canvas.height <= canvas.width) {
@@ -10016,7 +10025,7 @@ async function StartPhoneMP4Recording(filename, state) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '') + '.mp4';
+        a.download = NormalizeMP4Filename(filename);
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -10118,7 +10127,7 @@ async function StartDesktopMP4Recording(filename, state) {
       while (mediaExtensions.some(ext => cleanName.toLowerCase().endsWith(ext))) {
         cleanName = cleanName.slice(0, cleanName.lastIndexOf('.'));
       }
-      a.download = cleanName + '.mp4';
+      a.download = NormalizeMP4Filename(filename);
       document.body.appendChild(a);
       a.click();
       a.remove();
