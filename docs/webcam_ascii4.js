@@ -9970,10 +9970,175 @@ var ASM_CONSTS = {
  207748: () => { return window.innerHeight; },  
  207775: () => { if (document.pointerLockElement) return 1; }
 };
-function BrowserStartRecording(filename) { const canvas = document.getElementById('canvas'); if (!canvas || !canvas.captureStream || !window.MediaRecorder) return 0; let mime = null; for (const candidate of [ 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm' ]) { if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; } } if (!mime) return 0; try { const stream = canvas.captureStream(30); const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16000000 }); Module.browserRecorder = recorder; Module.browserRecordingStream = stream; Module.browserRecordingChunks = []; Module.browserRecordingFilename = UTF8ToString(filename); recorder.ondataavailable = function(event) { if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data); }; recorder.onstop = function() { const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || 'video/webm' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = Module.browserRecordingFilename || 'ascii_recording.webm'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); stream.getTracks().forEach(track => track.stop()); Module.browserRecorder = null; Module.browserRecordingStream = null; Module.browserRecordingChunks = []; }; recorder.start(1000); return 1; } catch (error) { console.error('Could not start browser recording:', error); return 0; } }
+function BrowserStartRecording(filename) {
+  const sourceCanvas = document.getElementById('canvas');
+  if (!sourceCanvas || !sourceCanvas.captureStream || !window.MediaRecorder) return 0;
+
+  const mobilePortrait = IsPhonePortraitRender();
+  const candidates = mobilePortrait
+    ? [
+        'video/mp4;codecs="avc1.42E01E"',
+        'video/mp4',
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/webm'
+      ]
+    : [
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/webm'
+      ];
+
+  let mime = null;
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported(candidate)) {
+      mime = candidate;
+      break;
+    }
+  }
+  if (!mime) {
+    console.error('No supported browser video recording format was found.');
+    return 0;
+  }
+
+  let recordingCanvas = sourceCanvas;
+  let copyContext = null;
+  let copyFrameRequest = 0;
+
+  try {
+    if (mobilePortrait) {
+      // Mirror the completed WebGL frame into a 2D canvas at the exact same
+      // intrinsic size. This captures the selected mode, colours, CRT/HUD,
+      // and animation without cropping or rebuilding the ASCII image.
+      recordingCanvas = document.createElement('canvas');
+      recordingCanvas.width = sourceCanvas.width;
+      recordingCanvas.height = sourceCanvas.height;
+      copyContext = recordingCanvas.getContext('2d');
+      if (!copyContext) throw new Error('Could not create the mobile recording canvas.');
+
+      const copyRenderedFrame = () => {
+        const width = sourceCanvas.width;
+        const height = sourceCanvas.height;
+
+        if (recordingCanvas.width !== width || recordingCanvas.height !== height) {
+          recordingCanvas.width = width;
+          recordingCanvas.height = height;
+          copyContext = recordingCanvas.getContext('2d');
+          if (!copyContext) throw new Error('Could not refresh the mobile recording canvas.');
+        }
+
+        if (width > 0 && height > 0) {
+          copyContext.drawImage(sourceCanvas, 0, 0, width, height);
+        }
+        copyFrameRequest = requestAnimationFrame(copyRenderedFrame);
+      };
+
+      copyRenderedFrame();
+    }
+
+    const stream = recordingCanvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, {
+      mimeType: mime,
+      videoBitsPerSecond: 16000000
+    });
+
+    const requestedFilename = UTF8ToString(filename) || 'ascii_recording';
+    const recordingFilename = mobilePortrait
+      ? requestedFilename.replace(/\.(mp4|webm|mov)$/i, '') +
+        (mime.indexOf('video/mp4') === 0 ? '.mp4' : '.webm')
+      : requestedFilename;
+
+    Module.browserRecorder = recorder;
+    Module.browserRecordingStream = stream;
+    Module.browserRecordingCanvas = recordingCanvas;
+    Module.browserRecordingChunks = [];
+    Module.browserRecordingFilename = recordingFilename;
+
+    recorder.ondataavailable = function(event) {
+      if (event.data && event.data.size > 0) {
+        Module.browserRecordingChunks.push(event.data);
+      }
+    };
+
+    recorder.onerror = function(event) {
+      console.error('Browser video recording failed:', event.error || event);
+    };
+
+    recorder.onstop = function() {
+      const blob = new Blob(Module.browserRecordingChunks, {
+        type: recorder.mimeType || mime
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = Module.browserRecordingFilename || 'ascii_recording.webm';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+
+      if (copyFrameRequest) {
+        cancelAnimationFrame(copyFrameRequest);
+        copyFrameRequest = 0;
+      }
+      stream.getTracks().forEach(track => track.stop());
+      Module.browserRecorder = null;
+      Module.browserRecordingStream = null;
+      Module.browserRecordingCanvas = null;
+      Module.browserRecordingChunks = [];
+    };
+
+    recorder.start(1000);
+    return 1;
+  } catch (error) {
+    if (copyFrameRequest) cancelAnimationFrame(copyFrameRequest);
+    console.error('Could not start browser recording:', error);
+    return 0;
+  }
+}
 function BrowserStopRecording() { const recorder = Module.browserRecorder; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
 function BrowserDownloadPNG(filename) { const canvas = document.getElementById('canvas'); if (!canvas) { console.error('ASCII canvas not found.'); return; } canvas.toBlob(function(blob) { if (!blob) { console.error('Could not create PNG screenshot.'); return; } const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }, 'image/png'); }
-function BrowserDownloadPNGBytes(filename,bytes,length) { const copy = HEAPU8.slice(bytes, bytes + length); const blob = new Blob([copy], { type: 'image/png' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+function BrowserDownloadPNGBytes(filename,bytes,length) {
+  const downloadName = UTF8ToString(filename);
+
+  if (IsPhonePortraitRender()) {
+    // The phone's WebGL canvas is the portrait render target. Use it directly
+    // instead of the PNG byte buffer produced by the older fixed-size export.
+    const canvas = document.getElementById('canvas');
+    if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
+      console.error('Portrait render canvas is unavailable for PNG export.');
+      return;
+    }
+
+    canvas.toBlob(function(blob) {
+      if (!blob) {
+        console.error('Could not create portrait PNG screenshot.');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = downloadName || 'ascii_snapshot.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }, 'image/png');
+    return;
+  }
+
+  // Preserve the original desktop PNG export path byte-for-byte.
+  const copy = HEAPU8.slice(bytes, bytes + length);
+  const blob = new Blob([copy], { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = downloadName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
 function BrowserDownloadText(filename,contents) { const blob = new Blob([UTF8ToString(contents)], { type: 'text/plain;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
 function StartBrowserCamera() { if (Module.browserCameraStarted) return; Module.browserCameraStarted = true; Module.browserCameraStatus = 0; const video = document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true; const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720; Module.browserCameraVideo = video; Module.browserCameraCanvas = canvas; Module.browserCameraContext = canvas.getContext('2d', { willReadFrequently: true }); if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { Module.browserCameraStatus = -1; return; } navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false }).then(function(stream) { video.srcObject = stream; return video.play(); }).then(function() { Module.browserCameraStatus = 1; }).catch(function(error) { console.error('Browser camera failed:', error); Module.browserCameraStatus = -1; }); }
 function GetBrowserCameraStatus() { return Module.browserCameraStatus || 0; }
