@@ -555,8 +555,8 @@
     };
   </script>
 
-  <script type="module">
-    // Mobile MP4 exports use the actual live render, muxed into an MP4 file.
+  <script>
+    // Dynamic import starts immediately and is available before the async app runtime.
     window.ASCII_MP4_READY = import('https://cdn.jsdelivr.net/npm/mediabunny@1.62.1/+esm')
       .catch(error => {
         console.error('MP4 encoder library could not be loaded:', error);
