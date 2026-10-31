@@ -10165,7 +10165,8 @@ function BrowserDownloadPNGBytes(filename,bytes,length) {
 
     // If the browser resized the backing store after GLFW initialized, restore
     // the real portrait window and wait for its next rendered frame.
-    if (width <= 0 || height <= width) {
+    if (width <= 0 || height <= width ||
+        canvas.width <= 0 || canvas.height <= canvas.width) {
       if (active && attempt < 3) {
         glfw.setWindowSize(active.id, 720, 1280);
         requestAnimationFrame(() => requestAnimationFrame(() => savePortraitCanvas(attempt + 1)));
@@ -10219,16 +10220,10 @@ function BrowserDownloadText(filename,contents) { const blob = new Blob([UTF8ToS
 function StartBrowserCamera() { if (Module.browserCameraStarted) return; Module.browserCameraStarted = true; Module.browserCameraStatus = 0; const video = document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true; const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720; Module.browserCameraVideo = video; Module.browserCameraCanvas = canvas; Module.browserCameraContext = canvas.getContext('2d', { willReadFrequently: true }); if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { Module.browserCameraStatus = -1; return; } navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false }).then(function(stream) { video.srcObject = stream; return video.play(); }).then(function() { Module.browserCameraStatus = 1; }).catch(function(error) { console.error('Browser camera failed:', error); Module.browserCameraStatus = -1; }); }
 function GetBrowserCameraStatus() { return Module.browserCameraStatus || 0; }
 function IsPhonePortraitRender() {
-  const phoneViewport = !!(
+  return !!(
     window.matchMedia &&
     window.matchMedia('(max-width: 520px), (pointer: coarse)').matches
   );
-  const activeWindow = Module.GLFW && Module.GLFW.active;
-  const portraitRuntime = !!(
-    activeWindow &&
-    activeWindow.width <= activeWindow.height
-  );
-  return phoneViewport || (portraitRuntime && phoneViewport);
 }
 function ReadBrowserCameraRGBA(destination) {
   const video = Module.browserCameraVideo;
