@@ -10032,7 +10032,7 @@ function BrowserStartRecording(filename) {
     Module.browserRecordingChunks = [];
     const requestedFilename = UTF8ToString(filename) || 'ascii_recording';
     Module.browserRecordingFilename = mobilePortrait
-      ? requestedFilename.replace(/\\.(mp4|webm|mov)$/i, '') + '.mp4'
+      ? requestedFilename.replace(/\.(mp4|webm|mov)$/i, '') + '.mp4'
       : requestedFilename;
 
     recorder.ondataavailable = function(event) {
