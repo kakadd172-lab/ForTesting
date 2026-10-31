@@ -10209,13 +10209,21 @@ function DownloadMobilePortraitPNG(filename) {
     alert('PNG could not be saved because the camera frame is not ready. Try again.');
     return false;
   }
-  renderer.canvas.toBlob(blob => {
-    if (!blob) {
-      alert('PNG encoding failed. Please try again.');
-      return;
-    }
-    DownloadBlob(blob, filename || 'ascii_snapshot_phone.png');
-  }, 'image/png');
+  // Create and click the download link synchronously while the Snapshot
+  // button's user gesture is still active (important on mobile browsers).
+  try {
+    const dataUrl = renderer.canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = filename || 'ascii_snapshot_phone.png';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (error) {
+    console.error('Could not create portrait PNG:', error);
+    alert('PNG export failed: ' + (error.message || error));
+    return false;
+  }
   return true;
 }
 
