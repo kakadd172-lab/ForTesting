@@ -9968,212 +9968,121 @@ var ASM_CONSTS = {
  207775: () => { if (document.pointerLockElement) return 1; }
 };
 function IsMobilePortraitExport() { return !!(window.matchMedia && window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches); }
-function CreatePortraitExportCanvas(source) { const output = document.createElement('canvas'); output.width = 1080; output.height = 1920; const ctx = output.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, output.width, output.height); const sw = source.videoWidth || source.width; const sh = source.videoHeight || source.height; if (!sw || !sh) return output; const targetRatio = output.width / output.height; const sourceRatio = sw / sh; let sx = 0, sy = 0, cropW = sw, cropH = sh; if (sourceRatio > targetRatio) { cropW = sh * targetRatio; sx = (sw - cropW) / 2; } else { cropH = sw / targetRatio; sy = (sh - cropH) / 2; } ctx.drawImage(source, sx, sy, cropW, cropH, 0, 0, output.width, output.height); return output; }
-function BrowserStartRecording(filename) { const source = document.getElementById('canvas'); if (!source || !source.captureStream || !window.MediaRecorder) return 0; let mime = null; for (const candidate of [ 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm' ]) { if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; } } if (!mime) return 0; try { const mobilePortrait = IsMobilePortraitExport(); const recordingCanvas = mobilePortrait ? document.createElement('canvas') : source; let drawFrame = 0; if (mobilePortrait) { recordingCanvas.width = 1080; recordingCanvas.height = 1920; const draw = function() { const frame = CreatePortraitExportCanvas(source); const ctx = recordingCanvas.getContext('2d'); ctx.drawImage(frame, 0, 0); drawFrame = requestAnimationFrame(draw); }; draw(); } const stream = recordingCanvas.captureStream(30); const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16000000 }); Module.browserRecorder = recorder; Module.browserRecordingStream = stream; Module.browserRecordingChunks = []; Module.browserRecordingFilename = UTF8ToString(filename); recorder.ondataavailable = function(event) { if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data); }; recorder.onstop = function() { const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || 'video/webm' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = Module.browserRecordingFilename || 'ascii_recording.webm'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); stream.getTracks().forEach(track => track.stop()); if (drawFrame) cancelAnimationFrame(drawFrame); Module.browserRecorder = null; Module.browserRecordingStream = null; Module.browserRecordingChunks = []; }; recorder.start(1000); return 1; } catch (error) { console.error('Could not start browser recording:', error); return 0; } }
+function CreatePortraitAsciiRenderer() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1920;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const cols = 100, rows = 106;
+  const cellW = canvas.width / cols, cellH = canvas.height / rows;
+  const sample = document.createElement('canvas');
+  sample.width = cols; sample.height = rows;
+  const sampleCtx = sample.getContext('2d', { willReadFrequently: true });
+  const ramp = ' .:-=+*#%@';
+  let latestText = '';
+  function render() {
+    const video = Module.browserCameraVideo;
+    if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return false;
+    const sourceRatio = video.videoWidth / video.videoHeight;
+    const targetRatio = 9 / 16;
+    let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
+    if (sourceRatio > targetRatio) { sw = video.videoHeight * targetRatio; sx = (video.videoWidth - sw) / 2; }
+    else { sh = video.videoWidth / targetRatio; sy = (video.videoHeight - sh) / 2; }
+    sampleCtx.save();
+    sampleCtx.translate(cols, 0);
+    sampleCtx.scale(-1, 1);
+    sampleCtx.drawImage(video, sx, sy, sw, sh, 0, 0, cols, rows);
+    sampleCtx.restore();
+    const pixels = sampleCtx.getImageData(0, 0, cols, rows).data;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '18px Consolas, "Courier New", monospace';
+    ctx.textBaseline = 'top';
+    const lines = [];
+    for (let y = 0; y < rows; y++) {
+      let line = '';
+      for (let x = 0; x < cols; x++) {
+        const p = (y * cols + x) * 4;
+        const r = pixels[p], g = pixels[p + 1], b = pixels[p + 2];
+        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        const index = Math.max(0, Math.min(ramp.length - 1, Math.round(luma / 255 * (ramp.length - 1))));
+        const ch = ramp[index];
+        line += ch;
+        ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+        ctx.fillText(ch, x * cellW, y * cellH);
+      }
+      lines.push(line);
+    }
+    latestText = lines.join('\n');
+    return true;
+  }
+  return { canvas, render, getText: () => latestText };
+}
+function DownloadBlob(blob, filename) {
+  if (!blob) { console.error('Could not create export.'); return; }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function BrowserStartRecording(filename) {
+  const source = document.getElementById('canvas');
+  if (!source || !source.captureStream || !window.MediaRecorder) return 0;
+  let mime = null;
+  for (const candidate of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
+    if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; }
+  }
+  if (!mime) return 0;
+  try {
+    const mobilePortrait = IsMobilePortraitExport();
+    const portrait = mobilePortrait ? CreatePortraitAsciiRenderer() : null;
+    const recordingCanvas = portrait ? portrait.canvas : source;
+    let drawFrame = 0;
+    if (portrait) {
+      const draw = function() {
+        portrait.render();
+        drawFrame = requestAnimationFrame(draw);
+      };
+      draw();
+    }
+    const stream = recordingCanvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16000000 });
+    Module.browserRecorder = recorder;
+    Module.browserRecordingStream = stream;
+    Module.browserRecordingChunks = [];
+    Module.browserRecordingFilename = UTF8ToString(filename);
+    recorder.ondataavailable = function(event) { if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data); };
+    recorder.onstop = function() {
+      const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || 'video/webm' });
+      DownloadBlob(blob, Module.browserRecordingFilename || 'ascii_recording.webm');
+      stream.getTracks().forEach(track => track.stop());
+      if (drawFrame) cancelAnimationFrame(drawFrame);
+      Module.browserRecorder = null; Module.browserRecordingStream = null; Module.browserRecordingChunks = [];
+    };
+    recorder.start(1000);
+    return 1;
+  } catch (error) { console.error('Could not start browser recording:', error); return 0; }
+}
 function BrowserStopRecording() { const recorder = Module.browserRecorder; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
 function BrowserDownloadPNG(filename) { const canvas = document.getElementById('canvas'); if (!canvas) { console.error('ASCII canvas not found.'); return; } const mobilePortrait = IsMobilePortraitExport(); const exportCanvas = mobilePortrait ? CreatePortraitExportCanvas(canvas) : canvas; exportCanvas.toBlob(function(blob) { if (!blob) { console.error('Could not create PNG screenshot.'); return; } const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }, 'image/png'); }
-function BrowserDownloadPNGBytes(filename,bytes,length) { const copy = HEAPU8.slice(bytes, bytes + length); const blob = new Blob([copy], { type: 'image/png' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
-function BrowserDownloadText(filename,contents) { const blob = new Blob([UTF8ToString(contents)], { type: 'text/plain;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
-function StartBrowserCamera() { if (Module.browserCameraStarted) return; Module.browserCameraStarted = true; Module.browserCameraStatus = 0; const video = document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true; const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720; Module.browserCameraVideo = video; Module.browserCameraCanvas = canvas; Module.browserCameraContext = canvas.getContext('2d', { willReadFrequently: true }); if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { Module.browserCameraStatus = -1; return; } navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false }).then(function(stream) { video.srcObject = stream; return video.play(); }).then(function() { Module.browserCameraStatus = 1; }).catch(function(error) { console.error('Browser camera failed:', error); Module.browserCameraStatus = -1; }); }
-function GetBrowserCameraStatus() { return Module.browserCameraStatus || 0; }
-function ReadBrowserCameraRGBA(destination) { const video = Module.browserCameraVideo; const canvas = Module.browserCameraCanvas; const context = Module.browserCameraContext; if (!video || !canvas || !context || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) { return 0; } context.drawImage(video, 0, 0, canvas.width, canvas.height); const image = context.getImageData( 0, 0, canvas.width, canvas.height ); HEAPU8.set(image.data, destination); return 1; }
-
-// Imports from the Wasm binary.
-var _main = Module['_main'] = makeInvalidEarlyAccess('_main');
-var _malloc = makeInvalidEarlyAccess('_malloc');
-var _free = makeInvalidEarlyAccess('_free');
-var _fflush = makeInvalidEarlyAccess('_fflush');
-var _strerror = makeInvalidEarlyAccess('_strerror');
-var _emscripten_stack_get_end = makeInvalidEarlyAccess('_emscripten_stack_get_end');
-var _emscripten_stack_get_base = makeInvalidEarlyAccess('_emscripten_stack_get_base');
-var _setThrew = makeInvalidEarlyAccess('_setThrew');
-var _emscripten_stack_init = makeInvalidEarlyAccess('_emscripten_stack_init');
-var _emscripten_stack_get_free = makeInvalidEarlyAccess('_emscripten_stack_get_free');
-var __emscripten_stack_restore = makeInvalidEarlyAccess('__emscripten_stack_restore');
-var __emscripten_stack_alloc = makeInvalidEarlyAccess('__emscripten_stack_alloc');
-var _emscripten_stack_get_current = makeInvalidEarlyAccess('_emscripten_stack_get_current');
-var dynCall_ii = makeInvalidEarlyAccess('dynCall_ii');
-var dynCall_vii = makeInvalidEarlyAccess('dynCall_vii');
-var dynCall_viii = makeInvalidEarlyAccess('dynCall_viii');
-var dynCall_viff = makeInvalidEarlyAccess('dynCall_viff');
-var dynCall_viiiii = makeInvalidEarlyAccess('dynCall_viiiii');
-var dynCall_viiii = makeInvalidEarlyAccess('dynCall_viiii');
-var dynCall_vidd = makeInvalidEarlyAccess('dynCall_vidd');
-var dynCall_iiii = makeInvalidEarlyAccess('dynCall_iiii');
-var dynCall_vi = makeInvalidEarlyAccess('dynCall_vi');
-var dynCall_iii = makeInvalidEarlyAccess('dynCall_iii');
-var dynCall_vid = makeInvalidEarlyAccess('dynCall_vid');
-var dynCall_di = makeInvalidEarlyAccess('dynCall_di');
-var dynCall_viiiiii = makeInvalidEarlyAccess('dynCall_viiiiii');
-var dynCall_viiiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiiii');
-var dynCall_viiiiiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiiiiii');
-var dynCall_iiiii = makeInvalidEarlyAccess('dynCall_iiiii');
-var dynCall_iiiiiii = makeInvalidEarlyAccess('dynCall_iiiiiii');
-var dynCall_viiiiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiiiii');
-var dynCall_viiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiii');
-var dynCall_viiiiiiiiidd = makeInvalidEarlyAccess('dynCall_viiiiiiiiidd');
-var dynCall_ji = makeInvalidEarlyAccess('dynCall_ji');
-var dynCall_iiiiiiiii = makeInvalidEarlyAccess('dynCall_iiiiiiiii');
-var dynCall_diii = makeInvalidEarlyAccess('dynCall_diii');
-var dynCall_viij = makeInvalidEarlyAccess('dynCall_viij');
-var dynCall_viid = makeInvalidEarlyAccess('dynCall_viid');
-var dynCall_iiiiii = makeInvalidEarlyAccess('dynCall_iiiiii');
-var dynCall_v = makeInvalidEarlyAccess('dynCall_v');
-var dynCall_vffff = makeInvalidEarlyAccess('dynCall_vffff');
-var dynCall_vf = makeInvalidEarlyAccess('dynCall_vf');
-var dynCall_i = makeInvalidEarlyAccess('dynCall_i');
-var dynCall_vff = makeInvalidEarlyAccess('dynCall_vff');
-var dynCall_vfi = makeInvalidEarlyAccess('dynCall_vfi');
-var dynCall_viif = makeInvalidEarlyAccess('dynCall_viif');
-var dynCall_vif = makeInvalidEarlyAccess('dynCall_vif');
-var dynCall_vifff = makeInvalidEarlyAccess('dynCall_vifff');
-var dynCall_viffff = makeInvalidEarlyAccess('dynCall_viffff');
-var dynCall_vfff = makeInvalidEarlyAccess('dynCall_vfff');
-var dynCall_jiji = makeInvalidEarlyAccess('dynCall_jiji');
-var dynCall_iidiiiii = makeInvalidEarlyAccess('dynCall_iidiiiii');
-var dynCall_viijii = makeInvalidEarlyAccess('dynCall_viijii');
-var dynCall_iiiiij = makeInvalidEarlyAccess('dynCall_iiiiij');
-var dynCall_iiiiid = makeInvalidEarlyAccess('dynCall_iiiiid');
-var dynCall_iiiiijj = makeInvalidEarlyAccess('dynCall_iiiiijj');
-var dynCall_iiiiiiii = makeInvalidEarlyAccess('dynCall_iiiiiiii');
-var dynCall_iiiiiijj = makeInvalidEarlyAccess('dynCall_iiiiiijj');
-var _asyncify_start_unwind = makeInvalidEarlyAccess('_asyncify_start_unwind');
-var _asyncify_stop_unwind = makeInvalidEarlyAccess('_asyncify_stop_unwind');
-var _asyncify_start_rewind = makeInvalidEarlyAccess('_asyncify_start_rewind');
-var _asyncify_stop_rewind = makeInvalidEarlyAccess('_asyncify_stop_rewind');
-var memory = makeInvalidEarlyAccess('memory');
-var __indirect_function_table = makeInvalidEarlyAccess('__indirect_function_table');
-var wasmMemory = makeInvalidEarlyAccess('wasmMemory');
-
-function assignWasmExports(wasmExports) {
-  assert(typeof wasmExports['main'] !== 'undefined', 'missing Wasm export: main');
-  assert(typeof wasmExports['malloc'] !== 'undefined', 'missing Wasm export: malloc');
-  assert(typeof wasmExports['free'] !== 'undefined', 'missing Wasm export: free');
-  assert(typeof wasmExports['fflush'] !== 'undefined', 'missing Wasm export: fflush');
-  assert(typeof wasmExports['strerror'] !== 'undefined', 'missing Wasm export: strerror');
-  assert(typeof wasmExports['emscripten_stack_get_end'] !== 'undefined', 'missing Wasm export: emscripten_stack_get_end');
-  assert(typeof wasmExports['emscripten_stack_get_base'] !== 'undefined', 'missing Wasm export: emscripten_stack_get_base');
-  assert(typeof wasmExports['setThrew'] !== 'undefined', 'missing Wasm export: setThrew');
-  assert(typeof wasmExports['emscripten_stack_init'] !== 'undefined', 'missing Wasm export: emscripten_stack_init');
-  assert(typeof wasmExports['emscripten_stack_get_free'] !== 'undefined', 'missing Wasm export: emscripten_stack_get_free');
-  assert(typeof wasmExports['_emscripten_stack_restore'] !== 'undefined', 'missing Wasm export: _emscripten_stack_restore');
-  assert(typeof wasmExports['_emscripten_stack_alloc'] !== 'undefined', 'missing Wasm export: _emscripten_stack_alloc');
-  assert(typeof wasmExports['emscripten_stack_get_current'] !== 'undefined', 'missing Wasm export: emscripten_stack_get_current');
-  assert(typeof wasmExports['dynCall_ii'] !== 'undefined', 'missing Wasm export: dynCall_ii');
-  assert(typeof wasmExports['dynCall_vii'] !== 'undefined', 'missing Wasm export: dynCall_vii');
-  assert(typeof wasmExports['dynCall_viii'] !== 'undefined', 'missing Wasm export: dynCall_viii');
-  assert(typeof wasmExports['dynCall_viff'] !== 'undefined', 'missing Wasm export: dynCall_viff');
-  assert(typeof wasmExports['dynCall_viiiii'] !== 'undefined', 'missing Wasm export: dynCall_viiiii');
-  assert(typeof wasmExports['dynCall_viiii'] !== 'undefined', 'missing Wasm export: dynCall_viiii');
-  assert(typeof wasmExports['dynCall_vidd'] !== 'undefined', 'missing Wasm export: dynCall_vidd');
-  assert(typeof wasmExports['dynCall_iiii'] !== 'undefined', 'missing Wasm export: dynCall_iiii');
-  assert(typeof wasmExports['dynCall_vi'] !== 'undefined', 'missing Wasm export: dynCall_vi');
-  assert(typeof wasmExports['dynCall_iii'] !== 'undefined', 'missing Wasm export: dynCall_iii');
-  assert(typeof wasmExports['dynCall_vid'] !== 'undefined', 'missing Wasm export: dynCall_vid');
-  assert(typeof wasmExports['dynCall_di'] !== 'undefined', 'missing Wasm export: dynCall_di');
-  assert(typeof wasmExports['dynCall_viiiiii'] !== 'undefined', 'missing Wasm export: dynCall_viiiiii');
-  assert(typeof wasmExports['dynCall_viiiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_viiiiiiii');
-  assert(typeof wasmExports['dynCall_viiiiiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_viiiiiiiiii');
-  assert(typeof wasmExports['dynCall_iiiii'] !== 'undefined', 'missing Wasm export: dynCall_iiiii');
-  assert(typeof wasmExports['dynCall_iiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_iiiiiii');
-  assert(typeof wasmExports['dynCall_viiiiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_viiiiiiiii');
-  assert(typeof wasmExports['dynCall_viiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_viiiiiii');
-  assert(typeof wasmExports['dynCall_viiiiiiiiidd'] !== 'undefined', 'missing Wasm export: dynCall_viiiiiiiiidd');
-  assert(typeof wasmExports['dynCall_ji'] !== 'undefined', 'missing Wasm export: dynCall_ji');
-  assert(typeof wasmExports['dynCall_iiiiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_iiiiiiiii');
-  assert(typeof wasmExports['dynCall_diii'] !== 'undefined', 'missing Wasm export: dynCall_diii');
-  assert(typeof wasmExports['dynCall_viij'] !== 'undefined', 'missing Wasm export: dynCall_viij');
-  assert(typeof wasmExports['dynCall_viid'] !== 'undefined', 'missing Wasm export: dynCall_viid');
-  assert(typeof wasmExports['dynCall_iiiiii'] !== 'undefined', 'missing Wasm export: dynCall_iiiiii');
-  assert(typeof wasmExports['dynCall_v'] !== 'undefined', 'missing Wasm export: dynCall_v');
-  assert(typeof wasmExports['dynCall_vffff'] !== 'undefined', 'missing Wasm export: dynCall_vffff');
-  assert(typeof wasmExports['dynCall_vf'] !== 'undefined', 'missing Wasm export: dynCall_vf');
-  assert(typeof wasmExports['dynCall_i'] !== 'undefined', 'missing Wasm export: dynCall_i');
-  assert(typeof wasmExports['dynCall_vff'] !== 'undefined', 'missing Wasm export: dynCall_vff');
-  assert(typeof wasmExports['dynCall_vfi'] !== 'undefined', 'missing Wasm export: dynCall_vfi');
-  assert(typeof wasmExports['dynCall_viif'] !== 'undefined', 'missing Wasm export: dynCall_viif');
-  assert(typeof wasmExports['dynCall_vif'] !== 'undefined', 'missing Wasm export: dynCall_vif');
-  assert(typeof wasmExports['dynCall_vifff'] !== 'undefined', 'missing Wasm export: dynCall_vifff');
-  assert(typeof wasmExports['dynCall_viffff'] !== 'undefined', 'missing Wasm export: dynCall_viffff');
-  assert(typeof wasmExports['dynCall_vfff'] !== 'undefined', 'missing Wasm export: dynCall_vfff');
-  assert(typeof wasmExports['dynCall_jiji'] !== 'undefined', 'missing Wasm export: dynCall_jiji');
-  assert(typeof wasmExports['dynCall_iidiiiii'] !== 'undefined', 'missing Wasm export: dynCall_iidiiiii');
-  assert(typeof wasmExports['dynCall_viijii'] !== 'undefined', 'missing Wasm export: dynCall_viijii');
-  assert(typeof wasmExports['dynCall_iiiiij'] !== 'undefined', 'missing Wasm export: dynCall_iiiiij');
-  assert(typeof wasmExports['dynCall_iiiiid'] !== 'undefined', 'missing Wasm export: dynCall_iiiiid');
-  assert(typeof wasmExports['dynCall_iiiiijj'] !== 'undefined', 'missing Wasm export: dynCall_iiiiijj');
-  assert(typeof wasmExports['dynCall_iiiiiiii'] !== 'undefined', 'missing Wasm export: dynCall_iiiiiiii');
-  assert(typeof wasmExports['dynCall_iiiiiijj'] !== 'undefined', 'missing Wasm export: dynCall_iiiiiijj');
-  assert(typeof wasmExports['asyncify_start_unwind'] !== 'undefined', 'missing Wasm export: asyncify_start_unwind');
-  assert(typeof wasmExports['asyncify_stop_unwind'] !== 'undefined', 'missing Wasm export: asyncify_stop_unwind');
-  assert(typeof wasmExports['asyncify_start_rewind'] !== 'undefined', 'missing Wasm export: asyncify_start_rewind');
-  assert(typeof wasmExports['asyncify_stop_rewind'] !== 'undefined', 'missing Wasm export: asyncify_stop_rewind');
-  assert(typeof wasmExports['memory'] !== 'undefined', 'missing Wasm export: memory');
-  assert(typeof wasmExports['__indirect_function_table'] !== 'undefined', 'missing Wasm export: __indirect_function_table');
-  _main = Module['_main'] = createExportWrapper('main', wasmExports['main'], 2);
-  _malloc = createExportWrapper('malloc', wasmExports['malloc'], 1);
-  _free = createExportWrapper('free', wasmExports['free'], 1);
-  _fflush = createExportWrapper('fflush', wasmExports['fflush'], 1);
-  _strerror = createExportWrapper('strerror', wasmExports['strerror'], 1);
-  _emscripten_stack_get_end = wasmExports['emscripten_stack_get_end'];
-  _emscripten_stack_get_base = wasmExports['emscripten_stack_get_base'];
-  _setThrew = createExportWrapper('setThrew', wasmExports['setThrew'], 2);
-  _emscripten_stack_init = wasmExports['emscripten_stack_init'];
-  _emscripten_stack_get_free = wasmExports['emscripten_stack_get_free'];
-  __emscripten_stack_restore = wasmExports['_emscripten_stack_restore'];
-  __emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'];
-  _emscripten_stack_get_current = wasmExports['emscripten_stack_get_current'];
-  dynCall_ii = dynCalls['ii'] = createExportWrapper('dynCall_ii', wasmExports['dynCall_ii'], 2);
-  dynCall_vii = dynCalls['vii'] = createExportWrapper('dynCall_vii', wasmExports['dynCall_vii'], 3);
-  dynCall_viii = dynCalls['viii'] = createExportWrapper('dynCall_viii', wasmExports['dynCall_viii'], 4);
-  dynCall_viff = dynCalls['viff'] = createExportWrapper('dynCall_viff', wasmExports['dynCall_viff'], 4);
-  dynCall_viiiii = dynCalls['viiiii'] = createExportWrapper('dynCall_viiiii', wasmExports['dynCall_viiiii'], 6);
-  dynCall_viiii = dynCalls['viiii'] = createExportWrapper('dynCall_viiii', wasmExports['dynCall_viiii'], 5);
-  dynCall_vidd = dynCalls['vidd'] = createExportWrapper('dynCall_vidd', wasmExports['dynCall_vidd'], 4);
-  dynCall_iiii = dynCalls['iiii'] = createExportWrapper('dynCall_iiii', wasmExports['dynCall_iiii'], 4);
-  dynCall_vi = dynCalls['vi'] = createExportWrapper('dynCall_vi', wasmExports['dynCall_vi'], 2);
-  dynCall_iii = dynCalls['iii'] = createExportWrapper('dynCall_iii', wasmExports['dynCall_iii'], 3);
-  dynCall_vid = dynCalls['vid'] = createExportWrapper('dynCall_vid', wasmExports['dynCall_vid'], 3);
-  dynCall_di = dynCalls['di'] = createExportWrapper('dynCall_di', wasmExports['dynCall_di'], 2);
-  dynCall_viiiiii = dynCalls['viiiiii'] = createExportWrapper('dynCall_viiiiii', wasmExports['dynCall_viiiiii'], 7);
-  dynCall_viiiiiiii = dynCalls['viiiiiiii'] = createExportWrapper('dynCall_viiiiiiii', wasmExports['dynCall_viiiiiiii'], 9);
-  dynCall_viiiiiiiiii = dynCalls['viiiiiiiiii'] = createExportWrapper('dynCall_viiiiiiiiii', wasmExports['dynCall_viiiiiiiiii'], 11);
-  dynCall_iiiii = dynCalls['iiiii'] = createExportWrapper('dynCall_iiiii', wasmExports['dynCall_iiiii'], 5);
-  dynCall_iiiiiii = dynCalls['iiiiiii'] = createExportWrapper('dynCall_iiiiiii', wasmExports['dynCall_iiiiiii'], 7);
-  dynCall_viiiiiiiii = dynCalls['viiiiiiiii'] = createExportWrapper('dynCall_viiiiiiiii', wasmExports['dynCall_viiiiiiiii'], 10);
-  dynCall_viiiiiii = dynCalls['viiiiiii'] = createExportWrapper('dynCall_viiiiiii', wasmExports['dynCall_viiiiiii'], 8);
-  dynCall_viiiiiiiiidd = dynCalls['viiiiiiiiidd'] = createExportWrapper('dynCall_viiiiiiiiidd', wasmExports['dynCall_viiiiiiiiidd'], 12);
-  dynCall_ji = dynCalls['ji'] = createExportWrapper('dynCall_ji', wasmExports['dynCall_ji'], 2);
-  dynCall_iiiiiiiii = dynCalls['iiiiiiiii'] = createExportWrapper('dynCall_iiiiiiiii', wasmExports['dynCall_iiiiiiiii'], 9);
-  dynCall_diii = dynCalls['diii'] = createExportWrapper('dynCall_diii', wasmExports['dynCall_diii'], 4);
-  dynCall_viij = dynCalls['viij'] = createExportWrapper('dynCall_viij', wasmExports['dynCall_viij'], 4);
-  dynCall_viid = dynCalls['viid'] = createExportWrapper('dynCall_viid', wasmExports['dynCall_viid'], 4);
-  dynCall_iiiiii = dynCalls['iiiiii'] = createExportWrapper('dynCall_iiiiii', wasmExports['dynCall_iiiiii'], 6);
-  dynCall_v = dynCalls['v'] = createExportWrapper('dynCall_v', wasmExports['dynCall_v'], 1);
-  dynCall_vffff = dynCalls['vffff'] = createExportWrapper('dynCall_vffff', wasmExports['dynCall_vffff'], 5);
-  dynCall_vf = dynCalls['vf'] = createExportWrapper('dynCall_vf', wasmExports['dynCall_vf'], 2);
-  dynCall_i = dynCalls['i'] = createExportWrapper('dynCall_i', wasmExports['dynCall_i'], 1);
-  dynCall_vff = dynCalls['vff'] = createExportWrapper('dynCall_vff', wasmExports['dynCall_vff'], 3);
-  dynCall_vfi = dynCalls['vfi'] = createExportWrapper('dynCall_vfi', wasmExports['dynCall_vfi'], 3);
-  dynCall_viif = dynCalls['viif'] = createExportWrapper('dynCall_viif', wasmExports['dynCall_viif'], 4);
-  dynCall_vif = dynCalls['vif'] = createExportWrapper('dynCall_vif', wasmExports['dynCall_vif'], 3);
-  dynCall_vifff = dynCalls['vifff'] = createExportWrapper('dynCall_vifff', wasmExports['dynCall_vifff'], 5);
-  dynCall_viffff = dynCalls['viffff'] = createExportWrapper('dynCall_viffff', wasmExports['dynCall_viffff'], 6);
-  dynCall_vfff = dynCalls['vfff'] = createExportWrapper('dynCall_vfff', wasmExports['dynCall_vfff'], 4);
-  dynCall_jiji = dynCalls['jiji'] = createExportWrapper('dynCall_jiji', wasmExports['dynCall_jiji'], 4);
-  dynCall_iidiiiii = dynCalls['iidiiiii'] = createExportWrapper('dynCall_iidiiiii', wasmExports['dynCall_iidiiiii'], 8);
-  dynCall_viijii = dynCalls['viijii'] = createExportWrapper('dynCall_viijii', wasmExports['dynCall_viijii'], 6);
-  dynCall_iiiiij = dynCalls['iiiiij'] = createExportWrapper('dynCall_iiiiij', wasmExports['dynCall_iiiiij'], 6);
-  dynCall_iiiiid = dynCalls['iiiiid'] = createExportWrapper('dynCall_iiiiid', wasmExports['dynCall_iiiiid'], 6);
-  dynCall_iiiiijj = dynCalls['iiiiijj'] = createExportWrapper('dynCall_iiiiijj', wasmExports['dynCall_iiiiijj'], 7);
-  dynCall_iiiiiiii = dynCalls['iiiiiiii'] = createExportWrapper('dynCall_iiiiiiii', wasmExports['dynCall_iiiiiiii'], 8);
-  dynCall_iiiiiijj = dynCalls['iiiiiijj'] = createExportWrapper('dynCall_iiiiiijj', wasmExports['dynCall_iiiiiijj'], 8);
-  _asyncify_start_unwind = createExportWrapper('asyncify_start_unwind', wasmExports['asyncify_start_unwind'], 1);
-  _asyncify_stop_unwind = createExportWrapper('asyncify_stop_unwind', wasmExports['asyncify_stop_unwind'], 0);
-  _asyncify_start_rewind = createExportWrapper('asyncify_start_rewind', wasmExports['asyncify_start_rewind'], 1);
-  _asyncify_stop_rewind = createExportWrapper('asyncify_stop_rewind', wasmExports['asyncify_stop_rewind'], 0);
-  memory = wasmMemory = wasmExports['memory'];
-  __indirect_function_table = wasmExports['__indirect_function_table'];
+function BrowserDownloadPNGBytes(filename,bytes,length) {
+  if (IsMobilePortraitExport()) {
+    const renderer = CreatePortraitAsciiRenderer();
+    if (!renderer.render()) { console.error('Camera frame is not ready for portrait export.'); return; }
+    renderer.canvas.toBlob(blob => DownloadBlob(blob, UTF8ToString(filename)), 'image/png');
+    return;
+  }
+  const copy = HEAPU8.slice(bytes, bytes + length);
+  DownloadBlob(new Blob([copy], { type: 'image/png' }), UTF8ToString(filename));
+}
+function BrowserDownloadText(filename,contents) {
+  if (IsMobilePortraitExport()) {
+    const renderer = CreatePortraitAsciiRenderer();
+    if (!renderer.render()) { console.error('Camera frame is not ready for portrait export.'); return; }
+    DownloadBlob(new Blob([renderer.getText()], { type: 'text/plain;charset=utf-8' }), UTF8ToString(filename));
+    return;
+  }
+  DownloadBlob(new Blob([UTF8ToString(contents)], { type: 'text/plain;charset=utf-8' }), UTF8ToString(filename));
 }
 
 var wasmImports = {
