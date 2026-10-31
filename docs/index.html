@@ -515,7 +515,14 @@
     document.querySelectorAll('#mobileMenu [data-adjust]').forEach((button) => {
       button.addEventListener('click', () => {
         const item = { font: 1, brightness: 2, contrast: 3 }[button.dataset.adjust];
-        const direction = Number(button.dataset.direction) < 0 ? 'ArrowLeft' : 'ArrowRight';
+        const sign = Number(button.dataset.direction) < 0 ? -1 : 1;
+        if (button.dataset.adjust === 'brightness') {
+          window.ASCII_EXPORT_STATE.brightness = Math.max(-100, Math.min(100, window.ASCII_EXPORT_STATE.brightness + sign * 2));
+        }
+        if (button.dataset.adjust === 'contrast') {
+          window.ASCII_EXPORT_STATE.contrast = Math.max(0.5, Math.min(2.5, window.ASCII_EXPORT_STATE.contrast + sign * 0.05));
+        }
+        const direction = sign < 0 ? 'ArrowLeft' : 'ArrowRight';
         canvasElement.focus();
         dispatchAppKey('p');
         window.setTimeout(() => {
@@ -580,6 +587,6 @@
         return null;
       });
   </script>
-  <script async type="text/javascript" src="webcam_ascii4.js?v=20261031-portrait-export-2"></script>
+  <script async type="text/javascript" src="webcam_ascii4.js?v=20261031-portrait-export-3"></script>
 </body>
 </html>
