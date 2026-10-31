@@ -236,16 +236,14 @@
       .app { height: auto; min-height: calc(100vh - 20px); }
       .panel { flex: none; overflow: visible; }
       .screen {
-        width: 100%;
-        height: auto;
-        min-height: 0;
-        aspect-ratio: 16 / 9;
+        height: 72svh;
+        min-height: 420px;
         padding: 4px;
         flex: none;
       }
       .emscripten_border {
-        width: 100%;
         height: 100%;
+        width: min(100%, calc(72svh * 9 / 16));
         min-width: 0;
         border-radius: 6px;
       }
@@ -255,8 +253,8 @@
         height: 100% !important;
         max-width: 100%;
         max-height: none;
-        aspect-ratio: 16 / 9;
-        object-fit: contain;
+        aspect-ratio: 9 / 16;
+        object-fit: fill;
       }
       .mobile-controls { display: grid; }
       footer { padding-bottom: 4px; }
@@ -407,10 +405,9 @@
         sendKey(false);
         if (window.matchMedia('(max-width: 520px), (pointer: coarse)').matches) {
           canvasElement.style.setProperty('display', 'block', 'important');
-          // Keep the native 16:9 canvas fitted to the landscape mobile viewport.
           canvasElement.style.setProperty('width', '100%', 'important');
           canvasElement.style.setProperty('height', '100%', 'important');
-          canvasElement.style.setProperty('aspect-ratio', '16 / 9', 'important');
+          canvasElement.style.setProperty('aspect-ratio', '9 / 16', 'important');
           canvasElement.style.setProperty('max-width', '100%', 'important');
           canvasElement.style.setProperty('max-height', 'none', 'important');
         }
