@@ -10074,19 +10074,66 @@ function BrowserStopRecording() { const recorder = Module.browserRecorder; if (r
 function BrowserDownloadPNG(filename) { const canvas = document.getElementById('canvas'); if (!canvas) { console.error('ASCII canvas not found.'); return; } canvas.toBlob(function(blob) { if (!blob) { console.error('Could not create PNG screenshot.'); return; } const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }, 'image/png'); }
 function BrowserDownloadPNGBytes(filename,bytes,length) {
   const downloadName = UTF8ToString(filename);
+  const mobilePortrait = IsPhonePortraitRender();
 
-  if (IsPhonePortraitRender()) {
-    // The phone's WebGL canvas is the portrait render target. Use it directly
-    // instead of the PNG byte buffer produced by the older fixed-size export.
+  if (mobilePortrait) {
+    // The canvas backing store is the physical WebGL framebuffer. Use its
+    // intrinsic dimensions, not the CSS display dimensions, for the PNG.
     const canvas = document.getElementById('canvas');
     if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
-      console.error('Portrait render canvas is unavailable for PNG export.');
+      console.error('Portrait WebGL framebuffer is unavailable for PNG export.');
       return;
     }
 
-    canvas.toBlob(function(blob) {
+    // WebGL drawing buffers can be cleared after presentation unless the
+    // context preserves them. Read the currently presented framebuffer.
+    const gl = Module.ctx || (
+      canvas.getContext('webgl2') ||
+      canvas.getContext('webgl')
+    );
+    if (!gl) {
+      console.error('WebGL context unavailable for portrait PNG export.');
+      return;
+    }
+
+    const width = gl.drawingBufferWidth || canvas.width;
+    const height = gl.drawingBufferHeight || canvas.height;
+    if (width <= 0 || height <= 0 || height <= width) {
+      console.error('Portrait PNG export stopped: framebuffer is not portrait.', {
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        framebufferWidth: width,
+        framebufferHeight: height
+      });
+      return;
+    }
+
+    // Copy the actual framebuffer pixels. No CSS scaling and no landscape crop.
+    const pixels = new Uint8Array(width * height * 4);
+    gl.finish();
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    const imageCanvas = document.createElement('canvas');
+    imageCanvas.width = width;
+    imageCanvas.height = height;
+    const imageContext = imageCanvas.getContext('2d');
+    if (!imageContext) {
+      console.error('Could not create portrait PNG image context.');
+      return;
+    }
+
+    const imageData = imageContext.createImageData(width, height);
+    const rowBytes = width * 4;
+    // WebGL rows are bottom-up; PNG canvas rows are top-down.
+    for (let y = 0; y < height; y++) {
+      const sourceStart = (height - 1 - y) * rowBytes;
+      imageData.data.set(pixels.subarray(sourceStart, sourceStart + rowBytes), y * rowBytes);
+    }
+    imageContext.putImageData(imageData, 0, 0);
+
+    imageCanvas.toBlob(function(blob) {
       if (!blob) {
-        console.error('Could not create portrait PNG screenshot.');
+        console.error('Could not encode portrait framebuffer as PNG.');
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -10101,7 +10148,7 @@ function BrowserDownloadPNGBytes(filename,bytes,length) {
     return;
   }
 
-  // Preserve the original desktop PNG export path byte-for-byte.
+  // Preserve the original desktop PNG export path.
   const copy = HEAPU8.slice(bytes, bytes + length);
   const blob = new Blob([copy], { type: 'image/png' });
   const url = URL.createObjectURL(blob);
