@@ -621,9 +621,9 @@
       print(...args) { console.log(...args); },
       onGLFWReady: configureMobilePortraitRuntime,
       locateFile(path) {
-        if (path.endsWith('.wasm')) {
-          return 'https://raw.githubusercontent.com/kakadd172-lab/CAM-ASCII-cpp/main/docs/webcam_ascii4.wasm';
-        }
+        // Load the matching WASM from this same GitHub Pages deployment.
+        // Avoid cross-repository raw URLs: Pages must serve the exact local
+        // binary alongside this generated JavaScript runtime.
         return path;
       },
       canvas: canvasElement,
