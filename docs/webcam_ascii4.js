@@ -10202,6 +10202,7 @@ function DownloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 function DownloadMobilePortraitPNG(filename) {
+  Module.browserMobilePngRequestedAt = Date.now();
   const renderer = CreatePortraitAsciiRenderer();
   if (!renderer.render()) {
     console.error('Portrait PNG export failed: camera frame is not ready.');
@@ -10215,7 +10216,6 @@ function DownloadMobilePortraitPNG(filename) {
     }
     DownloadBlob(blob, filename || 'ascii_snapshot_phone.png');
   }, 'image/png');
-  Module.browserMobilePngRequestedAt = Date.now();
   return true;
 }
 
@@ -10239,7 +10239,7 @@ async function StartMobileMP4Recording(filename, state) {
   });
   const videoSource = new CanvasSource(renderer.canvas, {
     codec: 'avc',
-    quality: new Quality({ bitrate: 8000000 })
+    quality: new Quality('high')
   });
   output.addVideoTrack(videoSource, { frameRate: 30 });
   await output.start();
