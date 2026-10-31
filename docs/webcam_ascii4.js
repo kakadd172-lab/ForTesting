@@ -9973,48 +9973,224 @@ function CreatePortraitAsciiRenderer() {
   canvas.width = 1080;
   canvas.height = 1920;
   const ctx = canvas.getContext('2d', { alpha: false });
-  const cols = 100, rows = 106;
-  const cellW = canvas.width / cols, cellH = canvas.height / rows;
+  if (!ctx) throw new Error('Could not create the portrait export canvas.');
+
+  // 9:16 character grid. This renders the camera feed as portrait content;
+  // it does not place a finished landscape screenshot inside a portrait file.
+  const cols = 100;
+  const rows = 106;
+  const cellW = canvas.width / cols;
+  const cellH = canvas.height / rows;
   const sample = document.createElement('canvas');
-  sample.width = cols; sample.height = rows;
+  sample.width = cols;
+  sample.height = rows;
   const sampleCtx = sample.getContext('2d', { willReadFrequently: true });
+  if (!sampleCtx) throw new Error('Could not create the portrait sample canvas.');
+
   const ramp = ' .:-=+*#%@';
+  const modeNames = [
+    'UNKNOWN', 'RAW_RGB', 'MATRIX_LINK', 'GEOMETRY', 'NEON_PUNK',
+    'TERM_AMBER', 'RETRO_8BIT', 'THERMAL_IR', 'RAW_BINARY', 'SIGNAL_LOST'
+  ];
   let latestText = '';
+
+  const clamp8 = value => Math.max(0, Math.min(255, Math.round(value)));
+  const getExportState = () => window.ASCII_EXPORT_STATE || {
+    mode: 4, crtScanlines: true, hideHUD: false, contrast: 1, brightness: 0
+  };
+
   function render() {
     const video = Module.browserCameraVideo;
     if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return false;
+
     const sourceRatio = video.videoWidth / video.videoHeight;
     const targetRatio = 9 / 16;
     let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
-    if (sourceRatio > targetRatio) { sw = video.videoHeight * targetRatio; sx = (video.videoWidth - sw) / 2; }
-    else { sh = video.videoWidth / targetRatio; sy = (video.videoHeight - sh) / 2; }
+
+    // Crop the original camera feed to a portrait field of view, then render
+    // a new portrait character grid. No crop is made from the landscape screen.
+    if (sourceRatio > targetRatio) {
+      sw = video.videoHeight * targetRatio;
+      sx = (video.videoWidth - sw) / 2;
+    } else {
+      sh = video.videoWidth / targetRatio;
+      sy = (video.videoHeight - sh) / 2;
+    }
+
     sampleCtx.save();
     sampleCtx.translate(cols, 0);
     sampleCtx.scale(-1, 1);
     sampleCtx.drawImage(video, sx, sy, sw, sh, 0, 0, cols, rows);
     sampleCtx.restore();
+
     const pixels = sampleCtx.getImageData(0, 0, cols, rows).data;
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const state = getExportState();
+    const mode = Math.max(1, Math.min(9, Number(state.mode) || 4));
+    const contrast = Number.isFinite(Number(state.contrast)) ? Number(state.contrast) : 1;
+    const brightness = Number.isFinite(Number(state.brightness)) ? Number(state.brightness) : 0;
+
+    const rgb = new Uint8ClampedArray(cols * rows * 3);
+    const gray = new Float32Array(cols * rows);
+    for (let i = 0; i < cols * rows; i++) {
+      const p = i * 4;
+      const q = i * 3;
+      const r = clamp8(pixels[p] * contrast + brightness);
+      const g = clamp8(pixels[p + 1] * contrast + brightness);
+      const b = clamp8(pixels[p + 2] * contrast + brightness);
+      rgb[q] = r;
+      rgb[q + 1] = g;
+      rgb[q + 2] = b;
+      gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.font = '18px Consolas, "Courier New", monospace';
     ctx.textBaseline = 'top';
+
     const lines = [];
+    const timeVal = performance.now() / 1000;
+
     for (let y = 0; y < rows; y++) {
       let line = '';
+      let rowOffset = 0;
+
+      if (mode === 9) {
+        if (Math.random() > 0.95) rowOffset = Math.floor(Math.random() * 7) - 3;
+        if ((y % 11) === 0 && Math.random() > 0.82) rowOffset = Math.floor(Math.random() * 17) - 8;
+      }
+
       for (let x = 0; x < cols; x++) {
-        const p = (y * cols + x) * 4;
-        const r = pixels[p], g = pixels[p + 1], b = pixels[p + 2];
-        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-        const index = Math.max(0, Math.min(ramp.length - 1, Math.round(luma / 255 * (ramp.length - 1))));
-        const ch = ramp[index];
+        const sampleX = Math.max(0, Math.min(cols - 1, x + rowOffset));
+        const i = y * cols + sampleX;
+        const q = i * 3;
+        let r = rgb[q], g = rgb[q + 1], b = rgb[q + 2];
+        const luma = gray[i];
+        let ch = ramp[Math.max(0, Math.min(ramp.length - 1, Math.round(luma / 255 * (ramp.length - 1))))];
+        let cr = r, cg = g, cb = b;
+
+        switch (mode) {
+          case 2:
+          case 9: {
+            const pulse = 30 + 20 * Math.sin(timeVal * 2 + y * 0.07);
+            cr = 20;
+            cg = clamp8(luma + 70 + pulse);
+            cb = 35;
+            if (mode === 9 && Math.random() > 0.99) ch = String.fromCharCode(33 + Math.floor(Math.random() * 94));
+            break;
+          }
+
+          case 3: {
+            const xm = Math.max(0, x - 1), xp = Math.min(cols - 1, x + 1);
+            const ym = Math.max(0, y - 1), yp = Math.min(rows - 1, y + 1);
+            const gx = -gray[ym * cols + xm] + gray[ym * cols + xp]
+                     - 2 * gray[y * cols + xm] + 2 * gray[y * cols + xp]
+                     - gray[yp * cols + xm] + gray[yp * cols + xp];
+            const gy = -gray[ym * cols + xm] - 2 * gray[ym * cols + x] - gray[ym * cols + xp]
+                     + gray[yp * cols + xm] + 2 * gray[yp * cols + x] + gray[yp * cols + xp];
+            const magnitude = Math.sqrt(gx * gx + gy * gy) / 4;
+            if (magnitude > 38) {
+              let angle = Math.atan2(gy, gx) * (180 / Math.PI);
+              if (angle < 0) angle += 180;
+              if (angle >= 22.5 && angle < 67.5) ch = '/';
+              else if (angle >= 67.5 && angle < 112.5) ch = '|';
+              else if (angle >= 112.5 && angle < 157.5) ch = '\\';
+              else ch = '-';
+              cr = 0; cg = 255; cb = 255;
+            } else {
+              ch = ' ';
+              cr = 0; cg = 30; cb = 30;
+            }
+            break;
+          }
+
+          case 4:
+            if (luma > 190) { cr = 255; cg = 255; cb = 120; }
+            else if (luma > 120) { cr = 255; cg = 25; cb = 165; }
+            else if (luma > 50) { cr = 0; cg = 225; cb = 255; }
+            else { cr = 35; cg = 10; cb = 55; }
+            break;
+
+          case 5:
+            cr = clamp8(luma + 95);
+            cg = clamp8(luma * 0.62);
+            cb = 0;
+            break;
+
+          case 6:
+            if (luma > 190) { cr = 155; cg = 188; cb = 15; ch = '#'; }
+            else if (luma > 120) { cr = 139; cg = 172; cb = 15; ch = 'x'; }
+            else if (luma > 60) { cr = 48; cg = 98; cb = 48; ch = ':'; }
+            else { cr = 15; cg = 56; cb = 15; ch = ' '; }
+            break;
+
+          case 7:
+            if (luma < 55) {
+              cr = 0; cg = 20; cb = clamp8(luma * 4);
+            } else if (luma < 125) {
+              cr = clamp8((luma - 55) * 3.6);
+              cg = 15;
+              cb = clamp8(255 - (luma - 55) * 2.7);
+            } else if (luma < 205) {
+              cr = 255;
+              cg = clamp8((luma - 125) * 3);
+              cb = 0;
+            } else {
+              cr = 255; cg = 255; cb = 200;
+            }
+            break;
+
+          case 8:
+            ch = luma > 112 ? '1' : '0';
+            if (luma < 24) ch = ' ';
+            cr = 0; cg = Math.max(100, luma); cb = 10;
+            break;
+
+          case 1:
+          default:
+            break;
+        }
+
         line += ch;
-        ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+        ctx.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
         ctx.fillText(ch, x * cellW, y * cellH);
       }
       lines.push(line);
     }
+
     latestText = lines.join('\n');
+
+    // Match the app's CRT overlay and HUD in the export, without touching
+    // the visible WebGL renderer.
+    if (state.crtScanlines !== false) {
+      ctx.fillStyle = 'rgba(0,0,0,0.34)';
+      for (let y = 0; y < canvas.height; y += 4) ctx.fillRect(0, y, canvas.width, 1);
+      const vignette = ctx.createRadialGradient(
+        canvas.width / 2, canvas.height / 2, canvas.width * 0.2,
+        canvas.width / 2, canvas.height / 2, canvas.height * 0.65
+      );
+      vignette.addColorStop(0, 'rgba(0,0,0,0)');
+      vignette.addColorStop(1, 'rgba(0,0,0,0.32)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (state.hideHUD !== true) {
+      ctx.fillStyle = 'rgba(0,10,5,0.88)';
+      ctx.fillRect(0, 0, canvas.width, 58);
+      ctx.fillRect(0, canvas.height - 44, canvas.width, 44);
+      ctx.fillStyle = '#32ff70';
+      ctx.font = 'bold 20px Consolas, "Courier New", monospace';
+      ctx.fillText('OPTIC_MODE // ' + modeNames[mode], 22, 18);
+      ctx.fillStyle = '#087c40';
+      ctx.font = '14px Consolas, "Courier New", monospace';
+      ctx.fillText('CNT ' + contrast.toFixed(2) + ' | BRT ' + brightness, 500, 21);
+      ctx.fillText('1-9 FILTERS | SPACE NEXT | P PAUSE | C CRT | H HUD | S SNAP | R REC', 22, canvas.height - 27);
+    }
+
     return true;
   }
+
   return { canvas, render, getText: () => latestText };
 }
 function DownloadBlob(blob, filename) {
@@ -10025,85 +10201,77 @@ function DownloadBlob(blob, filename) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
-function CreatePortraitExportCanvas(source) {
-  if (!source || !source.width || !source.height) {
-    throw new Error('The live render canvas is not ready for export.');
+function DownloadMobilePortraitPNG(filename) {
+  const renderer = CreatePortraitAsciiRenderer();
+  if (!renderer.render()) {
+    console.error('Portrait PNG export failed: camera frame is not ready.');
+    alert('PNG could not be saved because the camera frame is not ready. Try again.');
+    return false;
   }
-  const canvas = document.createElement('canvas');
-  canvas.width = 1080;
-  canvas.height = 1920;
-  const ctx = canvas.getContext('2d', { alpha: false });
-  if (!ctx) throw new Error('Could not create the portrait export canvas.');
-
-  // Preserve the complete live render. Fit it inside 9:16 without cropping
-  // or stretching; the unused portrait area is filled with black.
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const scale = Math.min(canvas.width / source.width, canvas.height / source.height);
-  const drawWidth = Math.round(source.width * scale);
-  const drawHeight = Math.round(source.height * scale);
-  const x = Math.round((canvas.width - drawWidth) / 2);
-  const y = Math.round((canvas.height - drawHeight) / 2);
-  ctx.drawImage(source, x, y, drawWidth, drawHeight);
-  return canvas;
+  renderer.canvas.toBlob(blob => {
+    if (!blob) {
+      alert('PNG encoding failed. Please try again.');
+      return;
+    }
+    DownloadBlob(blob, filename || 'ascii_snapshot_phone.png');
+  }, 'image/png');
+  Module.browserMobilePngRequestedAt = Date.now();
+  return true;
 }
 
-async function DownloadPortraitPNGFromBlob(blob, filename) {
-  const bitmap = await createImageBitmap(blob);
-  try {
-    const portrait = CreatePortraitExportCanvas(bitmap);
-    const output = await new Promise((resolve, reject) => {
-      portrait.toBlob(result => result ? resolve(result) : reject(new Error('PNG encoding failed.')), 'image/png');
-    });
-    DownloadBlob(output, filename);
-  } finally {
-    if (bitmap.close) bitmap.close();
-  }
-}
+window.ASCII_EXPORT_PORTRAIT_PNG_NOW = function() {
+  Module.browserMobilePngSequence = (Module.browserMobilePngSequence || 0) + 1;
+  const name = 'ascii_snapshot_phone_' + Module.browserMobilePngSequence + '.png';
+  DownloadMobilePortraitPNG(name);
+};
 
 async function StartMobileMP4Recording(filename, state) {
-  const source = document.getElementById('canvas');
-  if (!source || !source.width || !source.height) {
-    throw new Error('The live render canvas is not ready.');
-  }
   const library = window.ASCII_MP4_READY ? await window.ASCII_MP4_READY : null;
   if (!library) throw new Error('The MP4 encoder could not be loaded.');
 
   const { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality } = library;
-  const portrait = CreatePortraitExportCanvas(source);
+  const renderer = CreatePortraitAsciiRenderer();
+  if (!renderer.render()) throw new Error('The camera frame is not ready for portrait recording.');
+
   const output = new Output({
     format: new Mp4OutputFormat(),
     target: new BufferTarget()
   });
-  const videoSource = new CanvasSource(portrait, {
+  const videoSource = new CanvasSource(renderer.canvas, {
     codec: 'avc',
-    quality: new Quality('high')
+    quality: new Quality({ bitrate: 8000000 })
   });
   output.addVideoTrack(videoSource, { frameRate: 30 });
   await output.start();
 
   state.output = output;
   state.videoSource = videoSource;
-  state.portraitCanvas = portrait;
+  state.renderer = renderer;
   state.startedAt = performance.now();
   state.frameCount = 0;
+  state.finalizing = false;
 
   const addFrame = async () => {
+    if (!renderer.render()) throw new Error('The camera frame stopped during recording.');
     const timestamp = state.frameCount / 30;
     await videoSource.add(timestamp, 1 / 30);
     state.frameCount++;
   };
 
-  // Start with an immediate frame so even a very short recording is valid.
+  // The first encoded frame is already a portrait ASCII render, not a scaled
+  // landscape screenshot. Subsequent frames re-render the portrait camera crop.
   await addFrame();
 
   const finish = async () => {
+    if (state.finalizing) return;
+    state.finalizing = true;
     try {
+      videoSource.close();
       await output.finalize();
       const buffer = output.target.buffer;
       if (!buffer || buffer.byteLength === 0) throw new Error('The MP4 encoder returned an empty file.');
       const blob = new Blob([buffer], { type: 'video/mp4' });
-      const cleanName = (filename || 'ascii_recording').replace(/\\.(mp4|webm|mov)$/i, '');
+      const cleanName = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '');
       DownloadBlob(blob, cleanName + '.mp4');
     } finally {
       if (Module.browserMp4State === state) Module.browserMp4State = null;
@@ -10115,51 +10283,33 @@ async function StartMobileMP4Recording(filename, state) {
       await finish();
       return;
     }
+
     const elapsed = (performance.now() - state.startedAt) / 1000;
-    if (elapsed >= state.frameCount / 30) {
-      try {
-        // Read the current live canvas every frame: RGB/Cyberpunk modes,
-        // colors, overlays and animation are kept exactly as rendered.
-        const ctx = portrait.getContext('2d');
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, portrait.width, portrait.height);
-        const scale = Math.min(portrait.width / source.width, portrait.height / source.height);
-        const drawWidth = Math.round(source.width * scale);
-        const drawHeight = Math.round(source.height * scale);
-        ctx.drawImage(
-          source,
-          Math.round((portrait.width - drawWidth) / 2),
-          Math.round((portrait.height - drawHeight) / 2),
-          drawWidth,
-          drawHeight
-        );
-        await addFrame();
-      } catch (error) {
-        state.stopRequested = true;
-        state.error = error;
-      }
-    }
+    if (elapsed >= state.frameCount / 30) await addFrame();
+
     if (state.stopRequested) {
-      if (state.error) throw state.error;
       await finish();
       return;
     }
+
     state.raf = requestAnimationFrame(() => {
       tick().catch(error => {
-        console.error('MP4 recording failed:', error);
+        console.error('Portrait MP4 recording failed:', error);
         alert('MP4 recording failed: ' + (error.message || error));
         if (Module.browserMp4State === state) Module.browserMp4State = null;
       });
     });
   };
+
   state.raf = requestAnimationFrame(() => {
     tick().catch(error => {
-      console.error('MP4 recording failed:', error);
+      console.error('Portrait MP4 recording failed:', error);
       alert('MP4 recording failed: ' + (error.message || error));
       if (Module.browserMp4State === state) Module.browserMp4State = null;
     });
   });
 }
+
 
 function BrowserStartRecording(filename) {
   if (IsMobilePortraitExport()) {
@@ -10237,21 +10387,25 @@ function BrowserDownloadText(filename,contents) {
 
 
 function BrowserDownloadPNGBytes(filename, bytes, length) {
+  const name = UTF8ToString(filename) || 'ascii_snapshot.png';
+
+  if (IsMobilePortraitExport()) {
+    // The C++ snapshot still writes the TXT via BrowserDownloadText.
+    // Produce the PNG independently from the same camera frame as a true
+    // portrait render. Skip a duplicate if the phone snapshot key already
+    // requested the PNG directly.
+    if (Date.now() - (Module.browserMobilePngRequestedAt || 0) > 1500) {
+      DownloadMobilePortraitPNG(name);
+    }
+    return;
+  }
+
   if (typeof HEAPU8 === 'undefined' || !HEAPU8 || bytes < 0 || length < 0 || bytes + length > HEAPU8.length) {
     console.error('Invalid PNG data received from WebAssembly.');
     return;
   }
   const copy = HEAPU8.slice(bytes, bytes + length);
-  const blob = new Blob([copy], { type: 'image/png' });
-  const name = UTF8ToString(filename);
-  if (IsMobilePortraitExport()) {
-    DownloadPortraitPNGFromBlob(blob, name).catch(error => {
-      console.error('Portrait PNG conversion failed:', error);
-      alert('Portrait PNG export failed: ' + (error.message || error));
-    });
-    return;
-  }
-  DownloadBlob(blob, name);
+  DownloadBlob(new Blob([copy], { type: 'image/png' }), name);
 }
 function StartBrowserCamera() {
   if (Module.browserCameraStarted) return;
