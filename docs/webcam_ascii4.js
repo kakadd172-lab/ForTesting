@@ -10120,10 +10120,19 @@ async function StartMobileMP4Recording(filename, state) {
       try {
         // Read the current live canvas every frame: RGB/Cyberpunk modes,
         // colors, overlays and animation are kept exactly as rendered.
-        const freshPortrait = CreatePortraitExportCanvas(source);
         const ctx = portrait.getContext('2d');
-        ctx.clearRect(0, 0, portrait.width, portrait.height);
-        ctx.drawImage(freshPortrait, 0, 0);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, portrait.width, portrait.height);
+        const scale = Math.min(portrait.width / source.width, portrait.height / source.height);
+        const drawWidth = Math.round(source.width * scale);
+        const drawHeight = Math.round(source.height * scale);
+        ctx.drawImage(
+          source,
+          Math.round((portrait.width - drawWidth) / 2),
+          Math.round((portrait.height - drawHeight) / 2),
+          drawWidth,
+          drawHeight
+        );
         await addFrame();
       } catch (error) {
         state.stopRequested = true;
@@ -10195,10 +10204,7 @@ function BrowserStartRecording(filename) {
 function BrowserStopRecording() {
   if (Module.browserMp4State) {
     Module.browserMp4State.stopRequested = true;
-    if (Module.browserMp4State.raf) cancelAnimationFrame(Module.browserMp4State.raf);
-    // The encoder loop will finalize after any in-flight frame is completed.
-    const state = Module.browserMp4State;
-    if (!state.output && state.raf === 0) state.stopRequested = true;
+    // Let the scheduled encoder tick finish any in-flight frame and finalize.
     return;
   }
   const recorder = Module.browserRecorder;
