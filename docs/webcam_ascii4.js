@@ -10222,7 +10222,7 @@ function GetBrowserCameraStatus() { return Module.browserCameraStatus || 0; }
 function IsPhonePortraitRender() {
   return !!(
     window.matchMedia &&
-    window.matchMedia('(max-width: 520px), (pointer: coarse)').matches
+    window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches
   );
 }
 function ReadBrowserCameraRGBA(destination) {
