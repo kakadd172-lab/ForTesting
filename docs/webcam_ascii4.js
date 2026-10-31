@@ -10063,6 +10063,107 @@ async function StartPhoneMP4Recording(filename, state) {
   }
 }
 
+async function StartDesktopMP4Recording(filename, state) {
+  const canvas = document.getElementById('canvas');
+  if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
+    throw new Error('The desktop render canvas is not available.');
+  }
+
+  if (typeof VideoEncoder === 'undefined') {
+    throw new Error('This browser does not support WebCodecs AVC/H.264 encoding.');
+  }
+
+  const library = window.ASCII_MP4_READY
+    ? await window.ASCII_MP4_READY
+    : await import('https://cdn.jsdelivr.net/npm/mediabunny@1.62.1/+esm');
+
+  const { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality } = library;
+  const output = new Output({
+    format: new Mp4OutputFormat(),
+    target: new BufferTarget()
+  });
+  // Capture the existing desktop canvas directly. Do not resize it or alter
+  // its width, height, layout, or aspect ratio.
+  const videoSource = new CanvasSource(canvas, {
+    codec: 'avc',
+    quality: new Quality({ bitrate: 8000000 })
+  });
+
+  output.addVideoTrack(videoSource, { frameRate: 30 });
+  await output.start();
+
+  state.output = output;
+  state.videoSource = videoSource;
+  state.startedAt = performance.now();
+  state.frameCount = 0;
+  state.status = 'recording';
+  state.finalizing = false;
+
+  const finish = async () => {
+    if (state.finalizing) return;
+    state.finalizing = true;
+    try {
+      videoSource.close();
+      await output.finalize();
+      const buffer = output.target.buffer;
+      if (!buffer || buffer.byteLength === 0) {
+        throw new Error('The MP4 encoder produced an empty file.');
+      }
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '') + '.mp4';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      state.status = 'finished';
+    } finally {
+      if (Module.browserMp4State === state) Module.browserMp4State = null;
+    }
+  };
+
+  const fail = error => {
+    state.status = 'failed';
+    console.error('Desktop MP4 recording failed:', error);
+    alert('MP4 recording failed: ' + (error.message || error));
+    try { videoSource.close(); } catch (_) {}
+    if (Module.browserMp4State === state) Module.browserMp4State = null;
+  };
+
+  const addRenderedFrames = async () => {
+    if (state.stopRequested) {
+      await finish();
+      return;
+    }
+
+    const elapsed = (performance.now() - state.startedAt) / 1000;
+    const expectedTimestamp = state.frameCount / 30;
+    if (elapsed >= expectedTimestamp) {
+      await videoSource.add(expectedTimestamp, 1 / 30);
+      state.frameCount++;
+    }
+
+    if (state.stopRequested) {
+      await finish();
+      return;
+    }
+
+    if (Module.browserMp4State === state) {
+      state.raf = requestAnimationFrame(() => {
+        addRenderedFrames().catch(fail);
+      });
+    }
+  };
+
+  await videoSource.add(0, 1 / 30);
+  state.frameCount = 1;
+  state.raf = requestAnimationFrame(() => {
+    addRenderedFrames().catch(fail);
+  });
+}
+
 function BrowserStartRecording(filename) {
   if (IsPhonePortraitRender()) {
     if (Module.browserMp4State) return 0;
@@ -10077,56 +10178,18 @@ function BrowserStartRecording(filename) {
     return 1;
   }
 
-  // Original desktop browser recorder path remains unchanged.
   const canvas = document.getElementById('canvas');
-  if (!canvas || !canvas.captureStream || !window.MediaRecorder) return 0;
-  let mime = null;
-  for (const candidate of [
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm'
-  ]) {
-    if (MediaRecorder.isTypeSupported(candidate)) {
-      mime = candidate;
-      break;
-    }
-  }
-  if (!mime) return 0;
+  if (!canvas || canvas.width <= 0 || canvas.height <= 0 || Module.browserMp4State) return 0;
 
-  try {
-    const stream = canvas.captureStream(30);
-    const recorder = new MediaRecorder(stream, {
-      mimeType: mime,
-      videoBitsPerSecond: 16000000
-    });
-    Module.browserRecorder = recorder;
-    Module.browserRecordingStream = stream;
-    Module.browserRecordingChunks = [];
-    Module.browserRecordingFilename = UTF8ToString(filename);
-    recorder.ondataavailable = function(event) {
-      if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data);
-    };
-    recorder.onstop = function() {
-      const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = Module.browserRecordingFilename || 'ascii_recording.webm';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      stream.getTracks().forEach(track => track.stop());
-      Module.browserRecorder = null;
-      Module.browserRecordingStream = null;
-      Module.browserRecordingChunks = [];
-    };
-    recorder.start(1000);
-    return 1;
-  } catch (error) {
-    console.error('Could not start browser recording:', error);
-    return 0;
-  }
+  const state = { status: 'starting', stopRequested: false, raf: 0 };
+  Module.browserMp4State = state;
+  StartDesktopMP4Recording(UTF8ToString(filename), state).catch(error => {
+    state.status = 'failed';
+    console.error('Could not start desktop MP4 recording:', error);
+    alert('MP4 recording could not start: ' + (error.message || error));
+    if (Module.browserMp4State === state) Module.browserMp4State = null;
+  });
+  return 1;
 }
 function BrowserStopRecording() {
   if (Module.browserMp4State) {
