@@ -22,4 +22,4 @@ This branch is an isolated test in `ForTesting`. It does not modify `CAM-ASCII-c
 
 ## Important verification status
 
-The WebAssembly binary is loaded read-only from `CAM-ASCII-cpp/main`; this test does not rebuild or replace it. The fix is therefore a browser-runtime change to the dimensions supplied to the existing GLFW/WebGL renderer. The mobile PNG/video changes have been committed, but an actual browser run on a phone is still required to confirm the exported image, the selected visual mode in recorded video, and format compatibility. Do not treat this branch as proven until those phone tests pass.
+The WebAssembly binary is loaded read-only from `CAM-ASCII-cpp/main`; this test does not rebuild or replace it. The fix is therefore a browser-runtime change to the dimensions supplied to the existing GLFW/WebGL renderer. The mobile PNG/video changes have been committed, but an actual browser run on a phone is still required to confirm the drawing buffer is truly portrait and the browser can encode MP4/H.264. If MP4 is unsupported, the app intentionally reports failure instead of downloading WebM. Do not treat this branch as proven until those phone tests pass.
