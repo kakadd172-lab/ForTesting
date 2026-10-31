@@ -8842,11 +8842,8 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
         return table[param];
       },
   };
-  // Expose GLFW to the page. Its callback changes dimensions only on phones.
+  // Expose GLFW input to the page's mobile controls.
   Module.GLFW = GLFW;
-  if (typeof Module.onGLFWReady === 'function') {
-    Module.onGLFWReady(GLFW);
-  }
 
   var _glfwCreateWindow = (width, height, title, monitor, share) => GLFW.createWindow(width, height, title, monitor, share);
 
@@ -9970,367 +9967,939 @@ var ASM_CONSTS = {
  207748: () => { return window.innerHeight; },  
  207775: () => { if (document.pointerLockElement) return 1; }
 };
-async function StartPhoneMP4Recording(filename, state) {
-  const canvas = document.getElementById('canvas');
-  if (!canvas || canvas.width <= 0 || canvas.height <= canvas.width) {
-    throw new Error('The live render canvas is not portrait. MP4 recording was not started.');
+function IsMobilePortraitExport() { return !!(window.matchMedia && window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches); }
+function CreatePortraitAsciiRenderer() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1920;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const cols = 100, rows = 106;
+  const cellW = canvas.width / cols, cellH = canvas.height / rows;
+  const sample = document.createElement('canvas');
+  sample.width = cols; sample.height = rows;
+  const sampleCtx = sample.getContext('2d', { willReadFrequently: true });
+  const ramp = ' .:-=+*#%@';
+  let latestText = '';
+  function render() {
+    const video = Module.browserCameraVideo;
+    if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return false;
+    const sourceRatio = video.videoWidth / video.videoHeight;
+    const targetRatio = 9 / 16;
+    let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
+    if (sourceRatio > targetRatio) { sw = video.videoHeight * targetRatio; sx = (video.videoWidth - sw) / 2; }
+    else { sh = video.videoWidth / targetRatio; sy = (video.videoHeight - sh) / 2; }
+    sampleCtx.save();
+    sampleCtx.translate(cols, 0);
+    sampleCtx.scale(-1, 1);
+    sampleCtx.drawImage(video, sx, sy, sw, sh, 0, 0, cols, rows);
+    sampleCtx.restore();
+    const pixels = sampleCtx.getImageData(0, 0, cols, rows).data;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '18px Consolas, "Courier New", monospace';
+    ctx.textBaseline = 'top';
+    const lines = [];
+    for (let y = 0; y < rows; y++) {
+      let line = '';
+      for (let x = 0; x < cols; x++) {
+        const p = (y * cols + x) * 4;
+        const r = pixels[p], g = pixels[p + 1], b = pixels[p + 2];
+        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        const index = Math.max(0, Math.min(ramp.length - 1, Math.round(luma / 255 * (ramp.length - 1))));
+        const ch = ramp[index];
+        line += ch;
+        ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+        ctx.fillText(ch, x * cellW, y * cellH);
+      }
+      lines.push(line);
+    }
+    latestText = lines.join('\n');
+    return true;
   }
-
-  if (typeof VideoEncoder === 'undefined') {
-    throw new Error('This browser does not support WebCodecs AVC/H.264 encoding.');
+  return { canvas, render, getText: () => latestText };
+}
+function DownloadBlob(blob, filename) {
+  if (!blob) { console.error('Could not create export.'); return; }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function CreatePortraitExportCanvas(source) {
+  if (!source || !source.width || !source.height) {
+    throw new Error('The live render canvas is not ready for export.');
   }
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1920;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) throw new Error('Could not create the portrait export canvas.');
 
-  const library = window.ASCII_MP4_READY
-    ? await window.ASCII_MP4_READY
-    : await import('https://cdn.jsdelivr.net/npm/mediabunny@1.62.1/+esm');
+  // Preserve the complete live render. Fit it inside 9:16 without cropping
+  // or stretching; the unused portrait area is filled with black.
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const scale = Math.min(canvas.width / source.width, canvas.height / source.height);
+  const drawWidth = Math.round(source.width * scale);
+  const drawHeight = Math.round(source.height * scale);
+  const x = Math.round((canvas.width - drawWidth) / 2);
+  const y = Math.round((canvas.height - drawHeight) / 2);
+  ctx.drawImage(source, x, y, drawWidth, drawHeight);
+  return canvas;
+}
+
+async function DownloadPortraitPNGFromBlob(blob, filename) {
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const portrait = CreatePortraitExportCanvas(bitmap);
+    const output = await new Promise((resolve, reject) => {
+      portrait.toBlob(result => result ? resolve(result) : reject(new Error('PNG encoding failed.')), 'image/png');
+    });
+    DownloadBlob(output, filename);
+  } finally {
+    if (bitmap.close) bitmap.close();
+  }
+}
+
+async function StartMobileMP4Recording(filename, state) {
+  const source = document.getElementById('canvas');
+  if (!source || !source.width || !source.height) {
+    throw new Error('The live render canvas is not ready.');
+  }
+  const library = window.ASCII_MP4_READY ? await window.ASCII_MP4_READY : null;
+  if (!library) throw new Error('The MP4 encoder could not be loaded.');
 
   const { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality } = library;
+  const portrait = CreatePortraitExportCanvas(source);
   const output = new Output({
     format: new Mp4OutputFormat(),
     target: new BufferTarget()
   });
-  const videoSource = new CanvasSource(canvas, {
+  const videoSource = new CanvasSource(portrait, {
     codec: 'avc',
-    quality: new Quality({ bitrate: 8000000 })
+    quality: new Quality('high')
   });
-
   output.addVideoTrack(videoSource, { frameRate: 30 });
   await output.start();
 
   state.output = output;
   state.videoSource = videoSource;
+  state.portraitCanvas = portrait;
   state.startedAt = performance.now();
   state.frameCount = 0;
-  state.status = 'recording';
 
-  const addRenderedFrames = async () => {
-    if (state.stopRequested) {
-      try {
-        videoSource.close();
-        await output.finalize();
-        const buffer = output.target.buffer;
-        if (!buffer || buffer.byteLength === 0) {
-          throw new Error('The MP4 encoder produced an empty file.');
-        }
-        const blob = new Blob([buffer], { type: 'video/mp4' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '') + '.mp4';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
-        state.status = 'finished';
-      } catch (error) {
-        state.status = 'failed';
-        console.error('MP4 finalization failed:', error);
-        alert('MP4 export failed: ' + (error.message || error));
-      } finally {
-        Module.browserMp4State = null;
-      }
-      return;
-    }
+  const addFrame = async () => {
+    const timestamp = state.frameCount / 30;
+    await videoSource.add(timestamp, 1 / 30);
+    state.frameCount++;
+  };
 
-    const elapsed = (performance.now() - state.startedAt) / 1000;
-    const expectedTimestamp = state.frameCount / 30;
-    if (elapsed >= expectedTimestamp) {
-      try {
-        // Capture the original WebGL canvas, not a reconstructed text image.
-        // This preserves the exact RGB/Cyberpunk mode, CRT, HUD and animation.
-        await videoSource.add(expectedTimestamp, 1 / 30);
-        state.frameCount++;
-      } catch (error) {
-        state.status = 'failed';
-        state.stopRequested = true;
-        console.error('MP4 frame encoding failed:', error);
-        alert('MP4 recording failed: ' + (error.message || error));
-      }
-    }
+  // Start with an immediate frame so even a very short recording is valid.
+  await addFrame();
 
-    if (Module.browserMp4State === state) {
-      state.raf = requestAnimationFrame(addRenderedFrames);
+  const finish = async () => {
+    try {
+      await output.finalize();
+      const buffer = output.target.buffer;
+      if (!buffer || buffer.byteLength === 0) throw new Error('The MP4 encoder returned an empty file.');
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      const cleanName = (filename || 'ascii_recording').replace(/\\.(mp4|webm|mov)$/i, '');
+      DownloadBlob(blob, cleanName + '.mp4');
+    } finally {
+      if (Module.browserMp4State === state) Module.browserMp4State = null;
     }
   };
 
-  if (state.stopRequested) {
-    state.status = 'recording';
-    state.raf = requestAnimationFrame(addRenderedFrames);
-  } else {
-    await videoSource.add(0, 1 / 30);
-    state.frameCount = 1;
-    state.raf = requestAnimationFrame(addRenderedFrames);
-  }
+  const tick = async () => {
+    if (state.stopRequested) {
+      await finish();
+      return;
+    }
+    const elapsed = (performance.now() - state.startedAt) / 1000;
+    if (elapsed >= state.frameCount / 30) {
+      try {
+        // Read the current live canvas every frame: RGB/Cyberpunk modes,
+        // colors, overlays and animation are kept exactly as rendered.
+        const freshPortrait = CreatePortraitExportCanvas(source);
+        const ctx = portrait.getContext('2d');
+        ctx.clearRect(0, 0, portrait.width, portrait.height);
+        ctx.drawImage(freshPortrait, 0, 0);
+        await addFrame();
+      } catch (error) {
+        state.stopRequested = true;
+        state.error = error;
+      }
+    }
+    if (state.stopRequested) {
+      if (state.error) throw state.error;
+      await finish();
+      return;
+    }
+    state.raf = requestAnimationFrame(() => {
+      tick().catch(error => {
+        console.error('MP4 recording failed:', error);
+        alert('MP4 recording failed: ' + (error.message || error));
+        if (Module.browserMp4State === state) Module.browserMp4State = null;
+      });
+    });
+  };
+  state.raf = requestAnimationFrame(() => {
+    tick().catch(error => {
+      console.error('MP4 recording failed:', error);
+      alert('MP4 recording failed: ' + (error.message || error));
+      if (Module.browserMp4State === state) Module.browserMp4State = null;
+    });
+  });
 }
 
 function BrowserStartRecording(filename) {
-  if (IsPhonePortraitRender()) {
+  if (IsMobilePortraitExport()) {
     if (Module.browserMp4State) return 0;
-    const state = { status: 'starting', stopRequested: false, raf: 0 };
+    const state = { stopRequested: false, raf: 0 };
     Module.browserMp4State = state;
-    StartPhoneMP4Recording(UTF8ToString(filename), state).catch(error => {
-      state.status = 'failed';
-      Module.browserMp4State = null;
-      console.error('Could not start genuine MP4 recording:', error);
+    const requestedName = UTF8ToString(filename);
+    StartMobileMP4Recording(requestedName, state).catch(error => {
+      console.error('Could not start mobile MP4 recording:', error);
       alert('MP4 recording could not start: ' + (error.message || error));
+      if (Module.browserMp4State === state) Module.browserMp4State = null;
     });
     return 1;
   }
 
-  // Original desktop browser recorder path remains unchanged.
-  const canvas = document.getElementById('canvas');
-  if (!canvas || !canvas.captureStream || !window.MediaRecorder) return 0;
+  // Original desktop recorder is preserved unchanged.
+  const source = document.getElementById('canvas');
+  if (!source || !source.captureStream || !window.MediaRecorder) return 0;
   let mime = null;
-  for (const candidate of [
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm'
-  ]) {
-    if (MediaRecorder.isTypeSupported(candidate)) {
-      mime = candidate;
-      break;
-    }
+  for (const candidate of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
+    if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; }
   }
   if (!mime) return 0;
-
   try {
-    const stream = canvas.captureStream(30);
-    const recorder = new MediaRecorder(stream, {
-      mimeType: mime,
-      videoBitsPerSecond: 16000000
-    });
+    const stream = source.captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16000000 });
     Module.browserRecorder = recorder;
     Module.browserRecordingStream = stream;
     Module.browserRecordingChunks = [];
     Module.browserRecordingFilename = UTF8ToString(filename);
-    recorder.ondataavailable = function(event) {
-      if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data);
-    };
+    recorder.ondataavailable = function(event) { if (event.data && event.data.size > 0) Module.browserRecordingChunks.push(event.data); };
     recorder.onstop = function() {
-      const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = Module.browserRecordingFilename || 'ascii_recording.webm';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      const blob = new Blob(Module.browserRecordingChunks, { type: recorder.mimeType || 'video/webm' });
+      DownloadBlob(blob, Module.browserRecordingFilename || 'ascii_recording.webm');
       stream.getTracks().forEach(track => track.stop());
-      Module.browserRecorder = null;
-      Module.browserRecordingStream = null;
-      Module.browserRecordingChunks = [];
+      Module.browserRecorder = null; Module.browserRecordingStream = null; Module.browserRecordingChunks = [];
     };
     recorder.start(1000);
     return 1;
-  } catch (error) {
-    console.error('Could not start browser recording:', error);
-    return 0;
-  }
+  } catch (error) { console.error('Could not start browser recording:', error); return 0; }
 }
 function BrowserStopRecording() {
   if (Module.browserMp4State) {
     Module.browserMp4State.stopRequested = true;
+    if (Module.browserMp4State.raf) cancelAnimationFrame(Module.browserMp4State.raf);
+    // The encoder loop will finalize after any in-flight frame is completed.
+    const state = Module.browserMp4State;
+    if (!state.output && state.raf === 0) state.stopRequested = true;
     return;
   }
   const recorder = Module.browserRecorder;
   if (recorder && recorder.state !== 'inactive') recorder.stop();
 }
-function BrowserDownloadPNG(filename) { const canvas = document.getElementById('canvas'); if (!canvas) { console.error('ASCII canvas not found.'); return; } canvas.toBlob(function(blob) { if (!blob) { console.error('Could not create PNG screenshot.'); return; } const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }, 'image/png'); }
-function BrowserDownloadPNGBytes(filename,bytes,length) {
-  const downloadName = UTF8ToString(filename);
-  if (!IsPhonePortraitRender()) {
-    // Keep the desktop export path unchanged.
-    const copy = HEAPU8.slice(bytes, bytes + length);
-    const blob = new Blob([copy], { type: 'image/png' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = downloadName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+function BrowserDownloadPNG(filename) {
+  const source = document.getElementById('canvas');
+  if (!source) { console.error('ASCII canvas not found.'); return; }
+  if (IsMobilePortraitExport()) {
+    try {
+      const portrait = CreatePortraitExportCanvas(source);
+      portrait.toBlob(blob => DownloadBlob(blob, UTF8ToString(filename)), 'image/png');
+    } catch (error) {
+      console.error('Portrait PNG export failed:', error);
+      alert('Portrait PNG export failed: ' + (error.message || error));
+    }
     return;
   }
-
-  const canvas = document.getElementById('canvas');
-  const glfw = Module.GLFW;
-  const active = glfw && glfw.active;
-
-  const savePortraitCanvas = (attempt) => {
-    const gl = Module.ctx;
-    const width = gl && gl.drawingBufferWidth ? gl.drawingBufferWidth : canvas.width;
-    const height = gl && gl.drawingBufferHeight ? gl.drawingBufferHeight : canvas.height;
-
-    // If the browser resized the backing store after GLFW initialized, restore
-    // the real portrait window and wait for its next rendered frame.
-    if (width <= 0 || height <= width ||
-        canvas.width <= 0 || canvas.height <= canvas.width) {
-      if (active && attempt < 3) {
-        glfw.setWindowSize(active.id, 720, 1280);
-        requestAnimationFrame(() => requestAnimationFrame(() => savePortraitCanvas(attempt + 1)));
-        return;
-      }
-      console.error('PNG not saved: the live WebGL framebuffer is not portrait.', {
-        canvasWidth: canvas.width,
-        canvasHeight: canvas.height,
-        framebufferWidth: width,
-        framebufferHeight: height,
-        glfwWidth: active && active.width,
-        glfwHeight: active && active.height
-      });
-      alert('PNG was not saved because the live render surface is still landscape. Please reload the page and try again.');
-      return;
-    }
-
-    // toBlob captures the actual WebGL drawing buffer, including the exact
-    // selected mode and overlays. Its pixel dimensions are canvas.width × height.
-    if (canvas.width !== width || canvas.height !== height) {
-      if (attempt < 3) {
-        requestAnimationFrame(() => savePortraitCanvas(attempt + 1));
-        return;
-      }
-    }
-
-    canvas.toBlob(function(blob) {
-      if (!blob) {
-        console.error('Could not encode the portrait WebGL canvas as PNG.');
-        alert('PNG export failed. Please try again.');
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = downloadName || 'ascii_snapshot.png';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    }, 'image/png');
-  };
-
-  if (!canvas) {
-    console.error('PNG not saved: WebGL canvas not found.');
-    return;
-  }
-  savePortraitCanvas(0);
+  source.toBlob(blob => DownloadBlob(blob, UTF8ToString(filename)), 'image/png');
 }
-function BrowserDownloadText(filename,contents) { const blob = new Blob([UTF8ToString(contents)], { type: 'text/plain;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = UTF8ToString(filename); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
-function StartBrowserCamera() { if (Module.browserCameraStarted) return; Module.browserCameraStarted = true; Module.browserCameraStatus = 0; const video = document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true; const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720; Module.browserCameraVideo = video; Module.browserCameraCanvas = canvas; Module.browserCameraContext = canvas.getContext('2d', { willReadFrequently: true }); if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { Module.browserCameraStatus = -1; return; } navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false }).then(function(stream) { video.srcObject = stream; return video.play(); }).then(function() { Module.browserCameraStatus = 1; }).catch(function(error) { console.error('Browser camera failed:', error); Module.browserCameraStatus = -1; }); }
-function GetBrowserCameraStatus() { return Module.browserCameraStatus || 0; }
-function IsPhonePortraitRender() {
-  return !!(
-    window.matchMedia &&
-    window.matchMedia('(max-width: 520px) and (pointer: coarse)').matches
-  );
+function BrowserDownloadText(filename,contents) {
+  if (IsMobilePortraitExport()) {
+    const renderer = CreatePortraitAsciiRenderer();
+    if (!renderer.render()) { console.error('Camera frame is not ready for portrait export.'); return; }
+    DownloadBlob(new Blob([renderer.getText()], { type: 'text/plain;charset=utf-8' }), UTF8ToString(filename));
+    return;
+  }
+  DownloadBlob(new Blob([UTF8ToString(contents)], { type: 'text/plain;charset=utf-8' }), UTF8ToString(filename));
+}
+
+
+function BrowserDownloadPNGBytes(filename, bytes, length) {
+  if (typeof HEAPU8 === 'undefined' || !HEAPU8 || bytes < 0 || length < 0 || bytes + length > HEAPU8.length) {
+    console.error('Invalid PNG data received from WebAssembly.');
+    return;
+  }
+  const copy = HEAPU8.slice(bytes, bytes + length);
+  const blob = new Blob([copy], { type: 'image/png' });
+  const name = UTF8ToString(filename);
+  if (IsMobilePortraitExport()) {
+    DownloadPortraitPNGFromBlob(blob, name).catch(error => {
+      console.error('Portrait PNG conversion failed:', error);
+      alert('Portrait PNG export failed: ' + (error.message || error));
+    });
+    return;
+  }
+  DownloadBlob(blob, name);
+}
+function StartBrowserCamera() {
+  if (Module.browserCameraStarted) return;
+  Module.browserCameraStarted = true;
+  Module.browserCameraStatus = 0;
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 720;
+  Module.browserCameraVideo = video;
+  Module.browserCameraCanvas = canvas;
+  Module.browserCameraContext = canvas.getContext('2d', { willReadFrequently: true });
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    Module.browserCameraStatus = -1;
+    console.error('Camera access is not supported by this browser or origin.');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({
+    video: {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      facingMode: 'user'
+    },
+    audio: false
+  }).then(function(stream) {
+    video.srcObject = stream;
+    return video.play();
+  }).then(function() {
+    Module.browserCameraStatus = 1;
+  }).catch(function(error) {
+    console.error('Browser camera failed:', error);
+    Module.browserCameraStatus = -1;
+  });
+}
+function GetBrowserCameraStatus() {
+  return Module.browserCameraStatus || 0;
 }
 function ReadBrowserCameraRGBA(destination) {
   const video = Module.browserCameraVideo;
   const canvas = Module.browserCameraCanvas;
   const context = Module.browserCameraContext;
-  if (!video || !canvas || !context || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+  if (!video || !canvas || !context ||
+      video.readyState < 2 ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0 ||
+      typeof HEAPU8 === 'undefined') {
     return 0;
   }
-
-  if (IsPhonePortraitRender()) {
-    const sourceWidth = video.videoWidth;
-    const sourceHeight = video.videoHeight;
-    const targetAspect = 9 / 16;
-    const sourceAspect = sourceWidth / sourceHeight;
-    let sx = 0;
-    let sy = 0;
-    let cropWidth = sourceWidth;
-    let cropHeight = sourceHeight;
-
-    if (sourceAspect > targetAspect) {
-      cropWidth = sourceHeight * targetAspect;
-      sx = (sourceWidth - cropWidth) * 0.5;
-    } else {
-      cropHeight = sourceWidth / targetAspect;
-      sy = (sourceHeight - cropHeight) * 0.5;
-    }
-
-    context.drawImage(
-      video,
-      sx, sy, cropWidth, cropHeight,
-      0, 0, canvas.width, canvas.height
-    );
-  } else {
+  try {
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    if (destination < 0 || destination + image.data.length > HEAPU8.length) {
+      console.error('Camera frame destination is outside WebAssembly memory.');
+      return 0;
+    }
+    HEAPU8.set(image.data, destination);
+    return 1;
+  } catch (error) {
+    console.error('Could not read browser camera frame:', error);
+    return 0;
   }
-
-  const image = context.getImageData(0, 0, canvas.width, canvas.height);
-  HEAPU8.set(image.data, destination);
-  return 1;
 }
 
-// Imports from the Wasm binary.
-var _main = Module['_main'] = makeInvalidEarlyAccess('_main');
-var _malloc = makeInvalidEarlyAccess('_malloc');
-var _free = makeInvalidEarlyAccess('_free');
-var _fflush = makeInvalidEarlyAccess('_fflush');
-var _strerror = makeInvalidEarlyAccess('_strerror');
-var _emscripten_stack_get_end = makeInvalidEarlyAccess('_emscripten_stack_get_end');
-var _emscripten_stack_get_base = makeInvalidEarlyAccess('_emscripten_stack_get_base');
-var _setThrew = makeInvalidEarlyAccess('_setThrew');
-var _emscripten_stack_init = makeInvalidEarlyAccess('_emscripten_stack_init');
-var _emscripten_stack_get_free = makeInvalidEarlyAccess('_emscripten_stack_get_free');
-var __emscripten_stack_restore = makeInvalidEarlyAccess('__emscripten_stack_restore');
-var __emscripten_stack_alloc = makeInvalidEarlyAccess('__emscripten_stack_alloc');
-var _emscripten_stack_get_current = makeInvalidEarlyAccess('_emscripten_stack_get_current');
-var dynCall_ii = makeInvalidEarlyAccess('dynCall_ii');
-var dynCall_vii = makeInvalidEarlyAccess('dynCall_vii');
-var dynCall_viii = makeInvalidEarlyAccess('dynCall_viii');
-var dynCall_viff = makeInvalidEarlyAccess('dynCall_viff');
-var dynCall_viiiii = makeInvalidEarlyAccess('dynCall_viiiii');
-var dynCall_viiii = makeInvalidEarlyAccess('dynCall_viiii');
-var dynCall_vidd = makeInvalidEarlyAccess('dynCall_vidd');
-var dynCall_iiii = makeInvalidEarlyAccess('dynCall_iiii');
-var dynCall_vi = makeInvalidEarlyAccess('dynCall_vi');
-var dynCall_iii = makeInvalidEarlyAccess('dynCall_iii');
-var dynCall_vid = makeInvalidEarlyAccess('dynCall_vid');
-var dynCall_di = makeInvalidEarlyAccess('dynCall_di');
-var dynCall_viiiiii = makeInvalidEarlyAccess('dynCall_viiiiii');
-var dynCall_viiiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiiii');
-var dynCall_viiiiiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiiiiii');
-var dynCall_iiiii = makeInvalidEarlyAccess('dynCall_iiiii');
-var dynCall_iiiiiii = makeInvalidEarlyAccess('dynCall_iiiiiii');
-var dynCall_viiiiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiiiii');
-var dynCall_viiiiiii = makeInvalidEarlyAccess('dynCall_viiiiiii');
-var dynCall_viiiiiiiiidd = makeInvalidEarlyAccess('dynCall_viiiiiiiiidd');
-var dynCall_ji = makeInvalidEarlyAccess('dynCall_ji');
-var dynCall_iiiiiiiii = makeInvalidEarlyAccess('dynCall_iiiiiiiii');
-var dynCall_diii = makeInvalidEarlyAccess('dynCall_diii');
-var dynCall_viij = makeInvalidEarlyAccess('dynCall_viij');
-var dynCall_viid = makeInvalidEarlyAccess('dynCall_viid');
-var dynCall_iiiiii = makeInvalidEarlyAccess('dynCall_iiiiii');
-var dynCall_v = makeInvalidEarlyAccess('dynCall_v');
-var dynCall_vffff = makeInvalidEarlyAccess('dynCall_vffff');
-var dynCall_vf = makeInvalidEarlyAccess('dynCall_vf');
-var dynCall_i = makeInvalidEarlyAccess('dynCall_i');
-var dynCall_vff = makeInvalidEarlyAccess('dynCall_vff');
-var dynCall_vfi = makeInvalidEarlyAccess('dynCall_vfi');
-var dynCall_viif = makeInvalidEarlyAccess('dynCall_viif');
-var dynCall_vif = makeInvalidEarlyAccess('dynCall_vif');
-var dynCall_vifff = makeInvalidEarlyAccess('dynCall_vifff');
-var dynCall_viffff = makeInvalidEarlyAccess('dynCall_viffff');
-var dynCall_vfff = makeInvalidEarlyAccess('dynCall_vfff');
-var dynCall_jiji = makeInvalidEarlyAccess('dynCall_jiji');
-var dynCall_iidiiiii = makeInvalidEarlyAccess('dynCall_iidiiiii');
-var dynCall_viijii = makeInvalidEarlyAccess('dynCall_viijii');
-var dynCall_iiiiij = makeInvalidEarlyAccess('dynCall_iiiiij');
-var dynCall_iiiiid = makeInvalidEarlyAccess('dynCall_iiiiid');
-var dynCall_iiiiijj = makeInvalidEarlyAccess('dynCall_iiiiijj');
-var dynCall_iiiiiiii = makeInvalidEarlyAccess('dynCall_iiiiiiii');
-var dynCall_iiiiiijj = makeInvalidEarlyAccess('dynCall_iiiiiijj');
-var _asyncify_start_unwind = makeInvalidEarlyAccess('_asyncify_start_unwind');
-var _asyncify_stop_unwind = makeInvalidEarlyAccess('_asyncify_stop_unwind');
-var _asyncify_start_rewind = makeInvalidEarlyAccess('_asyncify_start_rewind');
-var _asyncify_stop_rewind = makeInvalidEarlyAccess('_asyncify_stop_rewind');
-var memory = makeInvalidEarlyAccess('memory');
-var __indirect_function_table = makeInvalidEarlyAccess('__indirect_function_table');
-var wasmMemory = makeInvalidEarlyAccess('wasmMemory');
+var wasmImports = {
+  /** @export */
+  BrowserDownloadPNGBytes,
+  /** @export */
+  BrowserDownloadText,
+  /** @export */
+  BrowserStartRecording,
+  /** @export */
+  BrowserStopRecording,
+  /** @export */
+  GetBrowserCameraStatus,
+  /** @export */
+  ReadBrowserCameraRGBA,
+  /** @export */
+  StartBrowserCamera,
+  /** @export */
+  __assert_fail: ___assert_fail,
+  /** @export */
+  __cxa_throw: ___cxa_throw,
+  /** @export */
+  __syscall_faccessat: ___syscall_faccessat,
+  /** @export */
+  __syscall_fcntl64: ___syscall_fcntl64,
+  /** @export */
+  __syscall_fstat64: ___syscall_fstat64,
+  /** @export */
+  __syscall_getcwd: ___syscall_getcwd,
+  /** @export */
+  __syscall_ioctl: ___syscall_ioctl,
+  /** @export */
+  __syscall_lstat64: ___syscall_lstat64,
+  /** @export */
+  __syscall_mkdirat: ___syscall_mkdirat,
+  /** @export */
+  __syscall_newfstatat: ___syscall_newfstatat,
+  /** @export */
+  __syscall_openat: ___syscall_openat,
+  /** @export */
+  __syscall_stat64: ___syscall_stat64,
+  /** @export */
+  _abort_js: __abort_js,
+  /** @export */
+  _tzset_js: __tzset_js,
+  /** @export */
+  clock_time_get: _clock_time_get,
+  /** @export */
+  emscripten_asm_const_int: _emscripten_asm_const_int,
+  /** @export */
+  emscripten_date_now: _emscripten_date_now,
+  /** @export */
+  emscripten_get_element_css_size: _emscripten_get_element_css_size,
+  /** @export */
+  emscripten_get_gamepad_status: _emscripten_get_gamepad_status,
+  /** @export */
+  emscripten_get_heap_max: _emscripten_get_heap_max,
+  /** @export */
+  emscripten_get_now: _emscripten_get_now,
+  /** @export */
+  emscripten_get_num_gamepads: _emscripten_get_num_gamepads,
+  /** @export */
+  emscripten_glActiveTexture: _emscripten_glActiveTexture,
+  /** @export */
+  emscripten_glAttachShader: _emscripten_glAttachShader,
+  /** @export */
+  emscripten_glBeginQueryEXT: _emscripten_glBeginQueryEXT,
+  /** @export */
+  emscripten_glBindAttribLocation: _emscripten_glBindAttribLocation,
+  /** @export */
+  emscripten_glBindBuffer: _emscripten_glBindBuffer,
+  /** @export */
+  emscripten_glBindFramebuffer: _emscripten_glBindFramebuffer,
+  /** @export */
+  emscripten_glBindRenderbuffer: _emscripten_glBindRenderbuffer,
+  /** @export */
+  emscripten_glBindTexture: _emscripten_glBindTexture,
+  /** @export */
+  emscripten_glBindVertexArrayOES: _emscripten_glBindVertexArrayOES,
+  /** @export */
+  emscripten_glBlendColor: _emscripten_glBlendColor,
+  /** @export */
+  emscripten_glBlendEquation: _emscripten_glBlendEquation,
+  /** @export */
+  emscripten_glBlendEquationSeparate: _emscripten_glBlendEquationSeparate,
+  /** @export */
+  emscripten_glBlendFunc: _emscripten_glBlendFunc,
+  /** @export */
+  emscripten_glBlendFuncSeparate: _emscripten_glBlendFuncSeparate,
+  /** @export */
+  emscripten_glBufferData: _emscripten_glBufferData,
+  /** @export */
+  emscripten_glBufferSubData: _emscripten_glBufferSubData,
+  /** @export */
+  emscripten_glCheckFramebufferStatus: _emscripten_glCheckFramebufferStatus,
+  /** @export */
+  emscripten_glClear: _emscripten_glClear,
+  /** @export */
+  emscripten_glClearColor: _emscripten_glClearColor,
+  /** @export */
+  emscripten_glClearDepthf: _emscripten_glClearDepthf,
+  /** @export */
+  emscripten_glClearStencil: _emscripten_glClearStencil,
+  /** @export */
+  emscripten_glClipControlEXT: _emscripten_glClipControlEXT,
+  /** @export */
+  emscripten_glColorMask: _emscripten_glColorMask,
+  /** @export */
+  emscripten_glCompileShader: _emscripten_glCompileShader,
+  /** @export */
+  emscripten_glCompressedTexImage2D: _emscripten_glCompressedTexImage2D,
+  /** @export */
+  emscripten_glCompressedTexSubImage2D: _emscripten_glCompressedTexSubImage2D,
+  /** @export */
+  emscripten_glCopyTexImage2D: _emscripten_glCopyTexImage2D,
+  /** @export */
+  emscripten_glCopyTexSubImage2D: _emscripten_glCopyTexSubImage2D,
+  /** @export */
+  emscripten_glCreateProgram: _emscripten_glCreateProgram,
+  /** @export */
+  emscripten_glCreateShader: _emscripten_glCreateShader,
+  /** @export */
+  emscripten_glCullFace: _emscripten_glCullFace,
+  /** @export */
+  emscripten_glDeleteBuffers: _emscripten_glDeleteBuffers,
+  /** @export */
+  emscripten_glDeleteFramebuffers: _emscripten_glDeleteFramebuffers,
+  /** @export */
+  emscripten_glDeleteProgram: _emscripten_glDeleteProgram,
+  /** @export */
+  emscripten_glDeleteQueriesEXT: _emscripten_glDeleteQueriesEXT,
+  /** @export */
+  emscripten_glDeleteRenderbuffers: _emscripten_glDeleteRenderbuffers,
+  /** @export */
+  emscripten_glDeleteShader: _emscripten_glDeleteShader,
+  /** @export */
+  emscripten_glDeleteTextures: _emscripten_glDeleteTextures,
+  /** @export */
+  emscripten_glDeleteVertexArraysOES: _emscripten_glDeleteVertexArraysOES,
+  /** @export */
+  emscripten_glDepthFunc: _emscripten_glDepthFunc,
+  /** @export */
+  emscripten_glDepthMask: _emscripten_glDepthMask,
+  /** @export */
+  emscripten_glDepthRangef: _emscripten_glDepthRangef,
+  /** @export */
+  emscripten_glDetachShader: _emscripten_glDetachShader,
+  /** @export */
+  emscripten_glDisable: _emscripten_glDisable,
+  /** @export */
+  emscripten_glDisableVertexAttribArray: _emscripten_glDisableVertexAttribArray,
+  /** @export */
+  emscripten_glDrawArrays: _emscripten_glDrawArrays,
+  /** @export */
+  emscripten_glDrawArraysInstancedANGLE: _emscripten_glDrawArraysInstancedANGLE,
+  /** @export */
+  emscripten_glDrawBuffersWEBGL: _emscripten_glDrawBuffersWEBGL,
+  /** @export */
+  emscripten_glDrawElements: _emscripten_glDrawElements,
+  /** @export */
+  emscripten_glDrawElementsInstancedANGLE: _emscripten_glDrawElementsInstancedANGLE,
+  /** @export */
+  emscripten_glEnable: _emscripten_glEnable,
+  /** @export */
+  emscripten_glEnableVertexAttribArray: _emscripten_glEnableVertexAttribArray,
+  /** @export */
+  emscripten_glEndQueryEXT: _emscripten_glEndQueryEXT,
+  /** @export */
+  emscripten_glFinish: _emscripten_glFinish,
+  /** @export */
+  emscripten_glFlush: _emscripten_glFlush,
+  /** @export */
+  emscripten_glFramebufferRenderbuffer: _emscripten_glFramebufferRenderbuffer,
+  /** @export */
+  emscripten_glFramebufferTexture2D: _emscripten_glFramebufferTexture2D,
+  /** @export */
+  emscripten_glFrontFace: _emscripten_glFrontFace,
+  /** @export */
+  emscripten_glGenBuffers: _emscripten_glGenBuffers,
+  /** @export */
+  emscripten_glGenFramebuffers: _emscripten_glGenFramebuffers,
+  /** @export */
+  emscripten_glGenQueriesEXT: _emscripten_glGenQueriesEXT,
+  /** @export */
+  emscripten_glGenRenderbuffers: _emscripten_glGenRenderbuffers,
+  /** @export */
+  emscripten_glGenTextures: _emscripten_glGenTextures,
+  /** @export */
+  emscripten_glGenVertexArraysOES: _emscripten_glGenVertexArraysOES,
+  /** @export */
+  emscripten_glGenerateMipmap: _emscripten_glGenerateMipmap,
+  /** @export */
+  emscripten_glGetActiveAttrib: _emscripten_glGetActiveAttrib,
+  /** @export */
+  emscripten_glGetActiveUniform: _emscripten_glGetActiveUniform,
+  /** @export */
+  emscripten_glGetAttachedShaders: _emscripten_glGetAttachedShaders,
+  /** @export */
+  emscripten_glGetAttribLocation: _emscripten_glGetAttribLocation,
+  /** @export */
+  emscripten_glGetBooleanv: _emscripten_glGetBooleanv,
+  /** @export */
+  emscripten_glGetBufferParameteriv: _emscripten_glGetBufferParameteriv,
+  /** @export */
+  emscripten_glGetError: _emscripten_glGetError,
+  /** @export */
+  emscripten_glGetFloatv: _emscripten_glGetFloatv,
+  /** @export */
+  emscripten_glGetFramebufferAttachmentParameteriv: _emscripten_glGetFramebufferAttachmentParameteriv,
+  /** @export */
+  emscripten_glGetIntegerv: _emscripten_glGetIntegerv,
+  /** @export */
+  emscripten_glGetProgramInfoLog: _emscripten_glGetProgramInfoLog,
+  /** @export */
+  emscripten_glGetProgramiv: _emscripten_glGetProgramiv,
+  /** @export */
+  emscripten_glGetQueryObjecti64vEXT: _emscripten_glGetQueryObjecti64vEXT,
+  /** @export */
+  emscripten_glGetQueryObjectivEXT: _emscripten_glGetQueryObjectivEXT,
+  /** @export */
+  emscripten_glGetQueryObjectui64vEXT: _emscripten_glGetQueryObjectui64vEXT,
+  /** @export */
+  emscripten_glGetQueryObjectuivEXT: _emscripten_glGetQueryObjectuivEXT,
+  /** @export */
+  emscripten_glGetQueryivEXT: _emscripten_glGetQueryivEXT,
+  /** @export */
+  emscripten_glGetRenderbufferParameteriv: _emscripten_glGetRenderbufferParameteriv,
+  /** @export */
+  emscripten_glGetShaderInfoLog: _emscripten_glGetShaderInfoLog,
+  /** @export */
+  emscripten_glGetShaderPrecisionFormat: _emscripten_glGetShaderPrecisionFormat,
+  /** @export */
+  emscripten_glGetShaderSource: _emscripten_glGetShaderSource,
+  /** @export */
+  emscripten_glGetShaderiv: _emscripten_glGetShaderiv,
+  /** @export */
+  emscripten_glGetString: _emscripten_glGetString,
+  /** @export */
+  emscripten_glGetTexParameterfv: _emscripten_glGetTexParameterfv,
+  /** @export */
+  emscripten_glGetTexParameteriv: _emscripten_glGetTexParameteriv,
+  /** @export */
+  emscripten_glGetUniformLocation: _emscripten_glGetUniformLocation,
+  /** @export */
+  emscripten_glGetUniformfv: _emscripten_glGetUniformfv,
+  /** @export */
+  emscripten_glGetUniformiv: _emscripten_glGetUniformiv,
+  /** @export */
+  emscripten_glGetVertexAttribPointerv: _emscripten_glGetVertexAttribPointerv,
+  /** @export */
+  emscripten_glGetVertexAttribfv: _emscripten_glGetVertexAttribfv,
+  /** @export */
+  emscripten_glGetVertexAttribiv: _emscripten_glGetVertexAttribiv,
+  /** @export */
+  emscripten_glHint: _emscripten_glHint,
+  /** @export */
+  emscripten_glIsBuffer: _emscripten_glIsBuffer,
+  /** @export */
+  emscripten_glIsEnabled: _emscripten_glIsEnabled,
+  /** @export */
+  emscripten_glIsFramebuffer: _emscripten_glIsFramebuffer,
+  /** @export */
+  emscripten_glIsProgram: _emscripten_glIsProgram,
+  /** @export */
+  emscripten_glIsQueryEXT: _emscripten_glIsQueryEXT,
+  /** @export */
+  emscripten_glIsRenderbuffer: _emscripten_glIsRenderbuffer,
+  /** @export */
+  emscripten_glIsShader: _emscripten_glIsShader,
+  /** @export */
+  emscripten_glIsTexture: _emscripten_glIsTexture,
+  /** @export */
+  emscripten_glIsVertexArrayOES: _emscripten_glIsVertexArrayOES,
+  /** @export */
+  emscripten_glLineWidth: _emscripten_glLineWidth,
+  /** @export */
+  emscripten_glLinkProgram: _emscripten_glLinkProgram,
+  /** @export */
+  emscripten_glPixelStorei: _emscripten_glPixelStorei,
+  /** @export */
+  emscripten_glPolygonModeWEBGL: _emscripten_glPolygonModeWEBGL,
+  /** @export */
+  emscripten_glPolygonOffset: _emscripten_glPolygonOffset,
+  /** @export */
+  emscripten_glPolygonOffsetClampEXT: _emscripten_glPolygonOffsetClampEXT,
+  /** @export */
+  emscripten_glQueryCounterEXT: _emscripten_glQueryCounterEXT,
+  /** @export */
+  emscripten_glReadPixels: _emscripten_glReadPixels,
+  /** @export */
+  emscripten_glReleaseShaderCompiler: _emscripten_glReleaseShaderCompiler,
+  /** @export */
+  emscripten_glRenderbufferStorage: _emscripten_glRenderbufferStorage,
+  /** @export */
+  emscripten_glSampleCoverage: _emscripten_glSampleCoverage,
+  /** @export */
+  emscripten_glScissor: _emscripten_glScissor,
+  /** @export */
+  emscripten_glShaderBinary: _emscripten_glShaderBinary,
+  /** @export */
+  emscripten_glShaderSource: _emscripten_glShaderSource,
+  /** @export */
+  emscripten_glStencilFunc: _emscripten_glStencilFunc,
+  /** @export */
+  emscripten_glStencilFuncSeparate: _emscripten_glStencilFuncSeparate,
+  /** @export */
+  emscripten_glStencilMask: _emscripten_glStencilMask,
+  /** @export */
+  emscripten_glStencilMaskSeparate: _emscripten_glStencilMaskSeparate,
+  /** @export */
+  emscripten_glStencilOp: _emscripten_glStencilOp,
+  /** @export */
+  emscripten_glStencilOpSeparate: _emscripten_glStencilOpSeparate,
+  /** @export */
+  emscripten_glTexImage2D: _emscripten_glTexImage2D,
+  /** @export */
+  emscripten_glTexParameterf: _emscripten_glTexParameterf,
+  /** @export */
+  emscripten_glTexParameterfv: _emscripten_glTexParameterfv,
+  /** @export */
+  emscripten_glTexParameteri: _emscripten_glTexParameteri,
+  /** @export */
+  emscripten_glTexParameteriv: _emscripten_glTexParameteriv,
+  /** @export */
+  emscripten_glTexSubImage2D: _emscripten_glTexSubImage2D,
+  /** @export */
+  emscripten_glUniform1f: _emscripten_glUniform1f,
+  /** @export */
+  emscripten_glUniform1fv: _emscripten_glUniform1fv,
+  /** @export */
+  emscripten_glUniform1i: _emscripten_glUniform1i,
+  /** @export */
+  emscripten_glUniform1iv: _emscripten_glUniform1iv,
+  /** @export */
+  emscripten_glUniform2f: _emscripten_glUniform2f,
+  /** @export */
+  emscripten_glUniform2fv: _emscripten_glUniform2fv,
+  /** @export */
+  emscripten_glUniform2i: _emscripten_glUniform2i,
+  /** @export */
+  emscripten_glUniform2iv: _emscripten_glUniform2iv,
+  /** @export */
+  emscripten_glUniform3f: _emscripten_glUniform3f,
+  /** @export */
+  emscripten_glUniform3fv: _emscripten_glUniform3fv,
+  /** @export */
+  emscripten_glUniform3i: _emscripten_glUniform3i,
+  /** @export */
+  emscripten_glUniform3iv: _emscripten_glUniform3iv,
+  /** @export */
+  emscripten_glUniform4f: _emscripten_glUniform4f,
+  /** @export */
+  emscripten_glUniform4fv: _emscripten_glUniform4fv,
+  /** @export */
+  emscripten_glUniform4i: _emscripten_glUniform4i,
+  /** @export */
+  emscripten_glUniform4iv: _emscripten_glUniform4iv,
+  /** @export */
+  emscripten_glUniformMatrix2fv: _emscripten_glUniformMatrix2fv,
+  /** @export */
+  emscripten_glUniformMatrix3fv: _emscripten_glUniformMatrix3fv,
+  /** @export */
+  emscripten_glUniformMatrix4fv: _emscripten_glUniformMatrix4fv,
+  /** @export */
+  emscripten_glUseProgram: _emscripten_glUseProgram,
+  /** @export */
+  emscripten_glValidateProgram: _emscripten_glValidateProgram,
+  /** @export */
+  emscripten_glVertexAttrib1f: _emscripten_glVertexAttrib1f,
+  /** @export */
+  emscripten_glVertexAttrib1fv: _emscripten_glVertexAttrib1fv,
+  /** @export */
+  emscripten_glVertexAttrib2f: _emscripten_glVertexAttrib2f,
+  /** @export */
+  emscripten_glVertexAttrib2fv: _emscripten_glVertexAttrib2fv,
+  /** @export */
+  emscripten_glVertexAttrib3f: _emscripten_glVertexAttrib3f,
+  /** @export */
+  emscripten_glVertexAttrib3fv: _emscripten_glVertexAttrib3fv,
+  /** @export */
+  emscripten_glVertexAttrib4f: _emscripten_glVertexAttrib4f,
+  /** @export */
+  emscripten_glVertexAttrib4fv: _emscripten_glVertexAttrib4fv,
+  /** @export */
+  emscripten_glVertexAttribDivisorANGLE: _emscripten_glVertexAttribDivisorANGLE,
+  /** @export */
+  emscripten_glVertexAttribPointer: _emscripten_glVertexAttribPointer,
+  /** @export */
+  emscripten_glViewport: _emscripten_glViewport,
+  /** @export */
+  emscripten_resize_heap: _emscripten_resize_heap,
+  /** @export */
+  emscripten_sample_gamepad_data: _emscripten_sample_gamepad_data,
+  /** @export */
+  emscripten_set_canvas_element_size: _emscripten_set_canvas_element_size,
+  /** @export */
+  emscripten_set_click_callback_on_thread: _emscripten_set_click_callback_on_thread,
+  /** @export */
+  emscripten_set_fullscreenchange_callback_on_thread: _emscripten_set_fullscreenchange_callback_on_thread,
+  /** @export */
+  emscripten_set_gamepadconnected_callback_on_thread: _emscripten_set_gamepadconnected_callback_on_thread,
+  /** @export */
+  emscripten_set_gamepaddisconnected_callback_on_thread: _emscripten_set_gamepaddisconnected_callback_on_thread,
+  /** @export */
+  emscripten_set_mousemove_callback_on_thread: _emscripten_set_mousemove_callback_on_thread,
+  /** @export */
+  emscripten_set_pointerlockchange_callback_on_thread: _emscripten_set_pointerlockchange_callback_on_thread,
+  /** @export */
+  emscripten_set_resize_callback_on_thread: _emscripten_set_resize_callback_on_thread,
+  /** @export */
+  emscripten_set_touchcancel_callback_on_thread: _emscripten_set_touchcancel_callback_on_thread,
+  /** @export */
+  emscripten_set_touchend_callback_on_thread: _emscripten_set_touchend_callback_on_thread,
+  /** @export */
+  emscripten_set_touchmove_callback_on_thread: _emscripten_set_touchmove_callback_on_thread,
+  /** @export */
+  emscripten_set_touchstart_callback_on_thread: _emscripten_set_touchstart_callback_on_thread,
+  /** @export */
+  emscripten_set_window_title: _emscripten_set_window_title,
+  /** @export */
+  emscripten_sleep: _emscripten_sleep,
+  /** @export */
+  environ_get: _environ_get,
+  /** @export */
+  environ_sizes_get: _environ_sizes_get,
+  /** @export */
+  exit: _exit,
+  /** @export */
+  fd_close: _fd_close,
+  /** @export */
+  fd_read: _fd_read,
+  /** @export */
+  fd_seek: _fd_seek,
+  /** @export */
+  fd_write: _fd_write,
+  /** @export */
+  glActiveTexture: _glActiveTexture,
+  /** @export */
+  glAttachShader: _glAttachShader,
+  /** @export */
+  glBindAttribLocation: _glBindAttribLocation,
+  /** @export */
+  glBindBuffer: _glBindBuffer,
+  /** @export */
+  glBindTexture: _glBindTexture,
+  /** @export */
+  glBlendFunc: _glBlendFunc,
+  /** @export */
+  glBufferData: _glBufferData,
+  /** @export */
+  glBufferSubData: _glBufferSubData,
+  /** @export */
+  glClear: _glClear,
+  /** @export */
+  glClearColor: _glClearColor,
+  /** @export */
+  glClearDepthf: _glClearDepthf,
+  /** @export */
+  glCompileShader: _glCompileShader,
+  /** @export */
+  glCompressedTexImage2D: _glCompressedTexImage2D,
+  /** @export */
+  glCreateProgram: _glCreateProgram,
+  /** @export */
+  glCreateShader: _glCreateShader,
+  /** @export */
+  glCullFace: _glCullFace,
+  /** @export */
+  glDeleteBuffers: _glDeleteBuffers,
+  /** @export */
+  glDeleteProgram: _glDeleteProgram,
+  /** @export */
+  glDeleteShader: _glDeleteShader,
+  /** @export */
+  glDeleteTextures: _glDeleteTextures,
+  /** @export */
+  glDepthFunc: _glDepthFunc,
+  /** @export */
+  glDetachShader: _glDetachShader,
+  /** @export */
+  glDisable: _glDisable,
+  /** @export */
+  glDisableVertexAttribArray: _glDisableVertexAttribArray,
+  /** @export */
+  glDrawArrays: _glDrawArrays,
+  /** @export */
+  glDrawElements: _glDrawElements,
+  /** @export */
+  glEnable: _glEnable,
+  /** @export */
+  glEnableVertexAttribArray: _glEnableVertexAttribArray,
+  /** @export */
+  glFrontFace: _glFrontFace,
+  /** @export */
+  glGenBuffers: _glGenBuffers,
+  /** @export */
+  glGenTextures: _glGenTextures,
+  /** @export */
+  glGetAttribLocation: _glGetAttribLocation,
+  /** @export */
+  glGetFloatv: _glGetFloatv,
+  /** @export */
+  glGetProgramInfoLog: _glGetProgramInfoLog,
+  /** @export */
+  glGetProgramiv: _glGetProgramiv,
+  /** @export */
+  glGetShaderInfoLog: _glGetShaderInfoLog,
+  /** @export */
+  glGetShaderiv: _glGetShaderiv,
+  /** @export */
+  glGetString: _glGetString,
+  /** @export */
+  glGetUniformLocation: _glGetUniformLocation,
+  /** @export */
+  glLinkProgram: _glLinkProgram,
+  /** @export */
+  glPixelStorei: _glPixelStorei,
+  /** @export */
+  glReadPixels: _glReadPixels,
+  /** @export */
+  glShaderSource: _glShaderSource,
+  /** @export */
+  glTexImage2D: _glTexImage2D,
+  /** @export */
+  glTexParameteri: _glTexParameteri,
+  /** @export */
+  glUniform1i: _glUniform1i,
+  /** @export */
+  glUniform4f: _glUniform4f,
+  /** @export */
+  glUniformMatrix4fv: _glUniformMatrix4fv,
+  /** @export */
+  glUseProgram: _glUseProgram,
+  /** @export */
+  glVertexAttribPointer: _glVertexAttribPointer,
+  /** @export */
+  glViewport: _glViewport,
+  /** @export */
+  glfwCreateWindow: _glfwCreateWindow,
+  /** @export */
+  glfwDefaultWindowHints: _glfwDefaultWindowHints,
+  /** @export */
+  glfwDestroyWindow: _glfwDestroyWindow,
+  /** @export */
+  glfwGetPrimaryMonitor: _glfwGetPrimaryMonitor,
+  /** @export */
+  glfwGetTime: _glfwGetTime,
+  /** @export */
+  glfwGetVideoModes: _glfwGetVideoModes,
+  /** @export */
+  glfwInit: _glfwInit,
+  /** @export */
+  glfwMakeContextCurrent: _glfwMakeContextCurrent,
+  /** @export */
+  glfwSetCharCallback: _glfwSetCharCallback,
+  /** @export */
+  glfwSetCursorEnterCallback: _glfwSetCursorEnterCallback,
+  /** @export */
+  glfwSetCursorPosCallback: _glfwSetCursorPosCallback,
+  /** @export */
+  glfwSetDropCallback: _glfwSetDropCallback,
+  /** @export */
+  glfwSetErrorCallback: _glfwSetErrorCallback,
+  /** @export */
+  glfwSetKeyCallback: _glfwSetKeyCallback,
+  /** @export */
+  glfwSetMouseButtonCallback: _glfwSetMouseButtonCallback,
+  /** @export */
+  glfwSetScrollCallback: _glfwSetScrollCallback,
+  /** @export */
+  glfwSetWindowContentScaleCallback: _glfwSetWindowContentScaleCallback,
+  /** @export */
+  glfwSetWindowFocusCallback: _glfwSetWindowFocusCallback,
+  /** @export */
+  glfwSetWindowIconifyCallback: _glfwSetWindowIconifyCallback,
+  /** @export */
+  glfwSetWindowShouldClose: _glfwSetWindowShouldClose,
+  /** @export */
+  glfwSetWindowSize: _glfwSetWindowSize,
+  /** @export */
+  glfwSetWindowSizeCallback: _glfwSetWindowSizeCallback,
+  /** @export */
+  glfwSwapBuffers: _glfwSwapBuffers,
+  /** @export */
+  glfwTerminate: _glfwTerminate,
+  /** @export */
+  glfwWindowHint: _glfwWindowHint
+};
+
+
 
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['main'] !== 'undefined', 'missing Wasm export: main');
@@ -11049,7 +11618,6 @@ var wasmImports = {
   /** @export */
   glfwWindowHint: _glfwWindowHint
 };
-
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
