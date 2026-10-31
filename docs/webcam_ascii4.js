@@ -9971,88 +9971,69 @@ var ASM_CONSTS = {
  207775: () => { if (document.pointerLockElement) return 1; }
 };
 function BrowserStartRecording(filename) {
-  const sourceCanvas = document.getElementById('canvas');
-  if (!sourceCanvas || !sourceCanvas.captureStream || !window.MediaRecorder) return 0;
+  const canvas = document.getElementById('canvas');
+  if (!canvas || !canvas.captureStream || !window.MediaRecorder) return 0;
 
   const mobilePortrait = IsPhonePortraitRender();
-  const candidates = mobilePortrait
-    ? [
-        'video/mp4;codecs="avc1.42E01E"',
-        'video/mp4',
-        'video/webm;codecs=vp9',
-        'video/webm;codecs=vp8',
-        'video/webm'
-      ]
-    : [
-        'video/webm;codecs=vp9',
-        'video/webm;codecs=vp8',
-        'video/webm'
-      ];
-
   let mime = null;
-  for (const candidate of candidates) {
-    if (MediaRecorder.isTypeSupported(candidate)) {
-      mime = candidate;
-      break;
-    }
-  }
-  if (!mime) {
-    console.error('No supported browser video recording format was found.');
-    return 0;
-  }
 
-  let recordingCanvas = sourceCanvas;
-  let copyContext = null;
-  let copyFrameRequest = 0;
+  if (mobilePortrait) {
+    // The phone export must be a real MP4. Never fall back to WebM or
+    // save WebM bytes with an .mp4 extension.
+    const mp4Candidates = [
+      'video/mp4;codecs="avc1.42E01E"',
+      'video/mp4'
+    ];
+    for (const candidate of mp4Candidates) {
+      if (MediaRecorder.isTypeSupported(candidate)) {
+        mime = candidate;
+        break;
+      }
+    }
+    if (!mime) {
+      console.error('MP4 recording is not supported by this phone browser.');
+      return 0;
+    }
+  } else {
+    // Preserve the original desktop browser recorder behaviour.
+    for (const candidate of [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ]) {
+      if (MediaRecorder.isTypeSupported(candidate)) {
+        mime = candidate;
+        break;
+      }
+    }
+    if (!mime) return 0;
+  }
 
   try {
-    if (mobilePortrait) {
-      // Mirror the completed WebGL frame into a 2D canvas at the exact same
-      // intrinsic size. This captures the selected mode, colours, CRT/HUD,
-      // and animation without cropping or rebuilding the ASCII image.
-      recordingCanvas = document.createElement('canvas');
-      recordingCanvas.width = sourceCanvas.width;
-      recordingCanvas.height = sourceCanvas.height;
-      copyContext = recordingCanvas.getContext('2d');
-      if (!copyContext) throw new Error('Could not create the mobile recording canvas.');
-
-      const copyRenderedFrame = () => {
-        const width = sourceCanvas.width;
-        const height = sourceCanvas.height;
-
-        if (recordingCanvas.width !== width || recordingCanvas.height !== height) {
-          recordingCanvas.width = width;
-          recordingCanvas.height = height;
-          copyContext = recordingCanvas.getContext('2d');
-          if (!copyContext) throw new Error('Could not refresh the mobile recording canvas.');
-        }
-
-        if (width > 0 && height > 0) {
-          copyContext.drawImage(sourceCanvas, 0, 0, width, height);
-        }
-        copyFrameRequest = requestAnimationFrame(copyRenderedFrame);
-      };
-
-      copyRenderedFrame();
-    }
-
-    const stream = recordingCanvas.captureStream(30);
+    // Record the actual WebGL canvas directly. Do not copy frames through a
+    // second 2D canvas: direct capture preserves the exact rendered pixels,
+    // selected colour mode, CRT effects, HUD and animation.
+    const stream = canvas.captureStream(30);
     const recorder = new MediaRecorder(stream, {
       mimeType: mime,
       videoBitsPerSecond: 16000000
     });
 
-    const requestedFilename = UTF8ToString(filename) || 'ascii_recording';
-    const recordingFilename = mobilePortrait
-      ? requestedFilename.replace(/\.(mp4|webm|mov)$/i, '') +
-        (mime.indexOf('video/mp4') === 0 ? '.mp4' : '.webm')
-      : requestedFilename;
+    // Confirm the browser did not silently choose a different container.
+    const actualMime = (recorder.mimeType || mime).toLowerCase();
+    if (mobilePortrait && !actualMime.startsWith('video/mp4')) {
+      stream.getTracks().forEach(track => track.stop());
+      console.error('The browser did not create an MP4 recording.');
+      return 0;
+    }
 
     Module.browserRecorder = recorder;
     Module.browserRecordingStream = stream;
-    Module.browserRecordingCanvas = recordingCanvas;
     Module.browserRecordingChunks = [];
-    Module.browserRecordingFilename = recordingFilename;
+    const requestedFilename = UTF8ToString(filename) || 'ascii_recording';
+    Module.browserRecordingFilename = mobilePortrait
+      ? requestedFilename.replace(/\\.(mp4|webm|mov)$/i, '') + '.mp4'
+      : requestedFilename;
 
     recorder.ondataavailable = function(event) {
       if (event.data && event.data.size > 0) {
@@ -10071,27 +10052,20 @@ function BrowserStartRecording(filename) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = Module.browserRecordingFilename || 'ascii_recording.webm';
+      a.download = Module.browserRecordingFilename || 'ascii_recording.mp4';
       document.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-
-      if (copyFrameRequest) {
-        cancelAnimationFrame(copyFrameRequest);
-        copyFrameRequest = 0;
-      }
       stream.getTracks().forEach(track => track.stop());
       Module.browserRecorder = null;
       Module.browserRecordingStream = null;
-      Module.browserRecordingCanvas = null;
       Module.browserRecordingChunks = [];
     };
 
     recorder.start(1000);
     return 1;
   } catch (error) {
-    if (copyFrameRequest) cancelAnimationFrame(copyFrameRequest);
     console.error('Could not start browser recording:', error);
     return 0;
   }
