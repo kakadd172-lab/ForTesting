@@ -10113,7 +10113,12 @@ async function StartDesktopMP4Recording(filename, state) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = (filename || 'ascii_recording').replace(/\.(mp4|webm|mov)$/i, '') + '.mp4';
+      let cleanName = filename || 'ascii_recording';
+      const mediaExtensions = ['.mp4', '.webm', '.mov'];
+      while (mediaExtensions.some(ext => cleanName.toLowerCase().endsWith(ext))) {
+        cleanName = cleanName.slice(0, cleanName.lastIndexOf('.'));
+      }
+      a.download = cleanName + '.mp4';
       document.body.appendChild(a);
       a.click();
       a.remove();
