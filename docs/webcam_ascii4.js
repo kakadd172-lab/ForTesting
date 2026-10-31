@@ -10371,17 +10371,12 @@ function BrowserStopRecording() {
 function BrowserDownloadPNG(filename) {
   const source = document.getElementById('canvas');
   if (!source) { console.error('ASCII canvas not found.'); return; }
+  const name = UTF8ToString(filename) || 'ascii_snapshot.png';
   if (IsMobilePortraitExport()) {
-    try {
-      const portrait = CreatePortraitExportCanvas(source);
-      portrait.toBlob(blob => DownloadBlob(blob, UTF8ToString(filename)), 'image/png');
-    } catch (error) {
-      console.error('Portrait PNG export failed:', error);
-      alert('Portrait PNG export failed: ' + (error.message || error));
-    }
+    DownloadMobilePortraitPNG(name);
     return;
   }
-  source.toBlob(blob => DownloadBlob(blob, UTF8ToString(filename)), 'image/png');
+  source.toBlob(blob => DownloadBlob(blob, name), 'image/png');
 }
 function BrowserDownloadText(filename,contents) {
   if (IsMobilePortraitExport()) {
