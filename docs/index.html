@@ -249,13 +249,12 @@
       }
       canvas.emscripten {
         display: block;
-        width: auto !important;
+        width: 100% !important;
         height: 100% !important;
-        max-width: none;
+        max-width: 100%;
         max-height: none;
-        aspect-ratio: 16 / 9;
-        object-fit: contain;
-        flex: none;
+        aspect-ratio: 9 / 16;
+        object-fit: fill;
       }
       .mobile-controls { display: grid; }
       footer { padding-bottom: 4px; }
@@ -406,12 +405,10 @@
         sendKey(false);
         if (window.matchMedia('(max-width: 520px), (pointer: coarse)').matches) {
           canvasElement.style.setProperty('display', 'block', 'important');
-          // Keep the native 16:9 canvas undistorted inside the portrait
-          // viewport; the wrapper clips the left and right sides.
-          canvasElement.style.setProperty('width', 'auto', 'important');
+          canvasElement.style.setProperty('width', '100%', 'important');
           canvasElement.style.setProperty('height', '100%', 'important');
-          canvasElement.style.setProperty('aspect-ratio', '16 / 9', 'important');
-          canvasElement.style.setProperty('max-width', 'none', 'important');
+          canvasElement.style.setProperty('aspect-ratio', '9 / 16', 'important');
+          canvasElement.style.setProperty('max-width', '100%', 'important');
           canvasElement.style.setProperty('max-height', 'none', 'important');
         }
       }, 100);
